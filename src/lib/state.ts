@@ -44,11 +44,11 @@ export class Sync {
     this.blockSyncs = syncs.filter((sync) => sync.trigger === Trigger.BLOCK)
 
     const timeFiltered = syncs.filter((sync) => sync.trigger === Trigger.TIME)
-    const uniqueTimeouts = new Set(...timeFiltered.map(sync => sync.triggerValue))
+    const uniqueTimeouts = new Set(timeFiltered.map(sync => sync.triggerValue))
     this.timeSyncs = [...uniqueTimeouts].map((timeout: number) => ({ timeout, syncs: timeFiltered.filter(sync => sync.triggerValue === timeout) }))
 
     const eventFiltered = syncs.filter((sync) => sync.trigger === Trigger.EVENT)
-    const uniqueEvents = new Set(...eventFiltered.map(sync => JSON.stringify(sync.triggerValue)))
+    const uniqueEvents = new Set(eventFiltered.map(sync => JSON.stringify(sync.triggerValue)))
     this.eventSyncs = [...uniqueEvents].map((stringifiedEvent: string) => {
       const matchingSyncs = eventFiltered.filter((sync) => JSON.stringify(sync.triggerValue) === stringifiedEvent)
       return { event: matchingSyncs[0].triggerValue, syncs: matchingSyncs }

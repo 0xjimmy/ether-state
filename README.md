@@ -7,11 +7,11 @@ Originally designed for managing state in (Svelte Kit Ethers Template)[https://g
 ## Basic Usage
 
 ```ts
-import { providers, utils, Interface } from 'ether'
+import { providers, utils } from 'ether'
 import { Sync, Trigger } from 'ether-state'
 import type { StateSync } from 'ether-state'
 
-const IERC20 = new Interface(['function totalSupply() external view returns (uint256)', 'function balanceOf(address) external view returns (uint256)', 'event Transfer(address indexed from, address indexed to, uint256 value)'])
+const IERC20 = new utils.Interface(['function totalSupply() external view returns (uint256)', 'function balanceOf(address) external view returns (uint256)', 'event Transfer(address indexed from, address indexed to, uint256 value)'])
 
 // Check totalSupply of DAI every block, check balance of every DAI recipient on Transfer event
 const syncs: StateSync[] = [
@@ -35,7 +35,7 @@ const syncs: StateSync[] = [
        utils.id("Transfer(address,address,uint256)"),
       ]
     },
-    input: ({ log }) => {
+    input: (log) => {
       const event = IERC20.decodeEventLog("Transfer", log.data, log.topics)
       console.log(`${event.from} sent ${utils.formatEther(event.value)} DAI to ${event.to}`)
       return [event.to]
