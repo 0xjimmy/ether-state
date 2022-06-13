@@ -2,7 +2,7 @@
 
 Library for syncing state from contracts.
 
-Originally designed for managing state in (Svelte Kit Ethers Template)[https://github.com/DecentralisedTech/svelte-kit-ethers-template], `ether-state` will query Ethereum contracts with the least amount of calls and event listeners.
+Originally designed for managing state in [Svelte Kit Ethers Template](https://github.com/DecentralisedTech/svelte-kit-ethers-template), `ether-state` will query Ethereum contracts with the least amount of calls and event listeners.
 
 ## Basic Usage
 
