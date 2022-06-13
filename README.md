@@ -7,7 +7,7 @@ Originally designed for managing state in (Svelte Kit Ethers Template)[https://g
 ## Basic Usage
 
 ```ts
-import { providers, utils } from 'ether'
+import { providers, utils } from 'ethers'
 import { Sync, Trigger } from 'ether-state'
 import type { StateSync } from 'ether-state'
 
