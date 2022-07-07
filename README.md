@@ -54,3 +54,83 @@ const syncs: StateSync[] = [
 const provider = providers.getDefaultProvider()
 const sync = new Sync(syncs, provider)
 ```
+
+## API
+* [Sync](#Sync)
+* [StateSync](#StateSync)
+* [Trigger](#Trigger)
+* [ContractCall](#ContractCall)
+
+### Sync
+Takes an array of `StateSyncs` and manages calling contracts based on their triggers.
+
+```ts
+import { Sync, Trigger, StateSync } from 'ether-state'
+import { providers } from 'ethers'
+
+const provider = providers.getDefaultProvider()
+const stateSyncs: StateSync[] = []
+
+// Create Sync
+const mySync = new Sync(provider, stateSyncs)
+
+
+// Manually trigger contract calls to all StateSyncs with BLOCK trigger
+mySync.triggerUpdate(Trigger.BLOCK)
+
+// Destory Sync, turn off all event listeners
+mySync.destroy()
+```
+
+**Create new Sync** -``Sync.constructor(ethers.providers.Provider, StateSync[])``
+
+**Manually Trigger Updates** - ``Sync.pushUpdate(Trigger.TIME | Trigger.BLOCK)``
+Triggers update calls to all StateSyncs with trigger types of either TIME or BLOCK.
+
+**Stop Updates** = ``Sync.destroy()``
+Removes all event listeners and stops all updates
+
+### StateSync
+Type for passing to Syncs.
+
+```ts
+type StateSync = {
+	trigger: Trigger,
+	triggerValue?: any
+	input: Function,
+	call: ContractCall,
+	output: Function
+}
+```
+
+* *``trigger`` - What type of *Trigger* to call contract
+* ``triggerValue`` (Optional) - Used for *EVENT* or *TIME* triggers, being an Ethers [EventFilter](https://docs.ethers.io/v5/api/providers/types/#providers-EventFilter) object or interval in milliseconds.
+* ``input`` - Function that returns an array of function parameters. Eg ``["0x6B175474E89094C44Da98b954EedeAC495271d0F", "5000"]``
+* ``call`` - See [ContractCall](#ContractCall)
+* ``output`` - Callback function that takes first argument as the call return value
+
+### Trigger
+Enum type for specifiying what to trigger a contract call.
+
+```ts
+enum Trigger {
+	BLOCK,
+	EVENT,
+	TIME
+}
+```
+
+### ContractCall
+Type that contains interface, selector and target of a call.
+
+```ts
+type ContractCall = {
+	target: () => string,
+	interface: Interface,
+	selector: string
+}
+```
+
+``target`` - A function that returns the target contract address
+``interface`` - An Ethers [Interface](https://docs.ethers.io/v5/api/utils/abi/interface/#Interface) type, can be created with ``new ethers.Interface(ABI)``
+``selector`` - Name of the function, just name like ``balanceOf`` or include full selector if needed like ``balanceOf(address)``
