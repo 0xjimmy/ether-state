@@ -15,8 +15,12 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: 16
-      - run: npm install --save
-      - run: npm run build
+      - uses: borales/actions-yarn@v3.0.0
+        with:
+          cmd: install
+      - uses: borales/actions-yarn@v3.0.0
+        with:
+          cmd: build
 
   publish-npm:
     needs: build
