@@ -1,11 +1,11 @@
 {
   "name": "ether-state",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Library for syncing state from contracts.",
   "main": "build/main/index.js",
   "typings": "build/main/index.d.ts",
   "module": "build/module/index.js",
-  "repository": "https://github.com/DecentralisedTech/ether-state",
+  "repository": "https://github.com/0xjimmy/ether-state",
   "license": "MIT",
   "keywords": [],
   "scripts": {
