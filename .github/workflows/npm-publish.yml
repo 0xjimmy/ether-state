@@ -4,33 +4,21 @@
 name: Node.js Package
 
 on:
-  release:
-    types: [created]
+    release:
+        types: [created]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 16
-      - uses: borales/actions-yarn@v3.0.0
-        with:
-          cmd: install
-      - uses: borales/actions-yarn@v3.0.0
-        with:
-          cmd: build
+    build-test-publish:
+        runs-on: 'ubuntu-latest'
 
-  publish-npm:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 16
-          registry-url: https://registry.npmjs.org/
-      - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.npm_token}}
+        steps:
+            - uses: 'actions/checkout@v2'
+              with:
+                  ref: '${{ github.event.release.target_commitish }}'
+            - name: 'Use Node.js 16'
+              uses: 'actions/setup-node@v1'
+            - run: 'yarn install'
+            - run: 'yarn build'
+            - run: 'npm publish --access public'
+              env:
+                  NODE_AUTH_TOKEN: '${{ secrets.npm_token }}'
