@@ -103,7 +103,7 @@ export class Sync {
 							item.input(blockHeight)
 						),
 					}));
-					const [blockNumber, _, returnData]: [
+					const [blockNumber, , returnData]: [
 						BigNumber,
 						null,
 						[boolean, BytesLike][]
@@ -139,7 +139,7 @@ export class Sync {
 			this.multicall.callStatic
 				.tryBlockAndAggregate(false, contractCalls)
 				.then((result) => {
-					const [blockNumber, _, returnData]: [
+					const [blockNumber, , returnData]: [
 						BigNumber,
 						null,
 						[boolean, BytesLike][]
@@ -171,7 +171,7 @@ export class Sync {
 							item.input()
 						),
 					}));
-					const [blockNumber, _, returnData]: [
+					const [blockNumber, , returnData]: [
 						BigNumber,
 						null,
 						[boolean, BytesLike][]
@@ -207,7 +207,7 @@ export class Sync {
 							item.input(log, event)
 						),
 					}));
-					const [blockNumber, _, returnData]: [
+					const [blockNumber, , returnData]: [
 						BigNumber,
 						null,
 						[boolean, BytesLike][]
@@ -244,7 +244,7 @@ export class Sync {
 						item.input(this.blockHeight)
 					),
 				}));
-				const [blockNumber, _, returnData]: [
+				const [blockNumber, , returnData]: [
 					BigNumber,
 					null,
 					[boolean, BytesLike][]
@@ -275,7 +275,7 @@ export class Sync {
 					item.input()
 				),
 			}));
-			const [blockNumber, _, returnData]: [
+			const [blockNumber, , returnData]: [
 				BigNumber,
 				null,
 				[boolean, BytesLike][]
