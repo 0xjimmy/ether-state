@@ -2,7 +2,7 @@ name: Build and Publish on NPM
 on:
     push:
         branches:
-            - main
+            - master
 jobs:
     unit-tests:
         runs-on: ubuntu-latest
