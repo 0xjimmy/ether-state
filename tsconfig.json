@@ -4,7 +4,7 @@
 		"target": "ESNext",
 		"outDir": "build/main",
 		"rootDir": "src",
-		"moduleResolution": "NodeNext",
+		"moduleResolution": "Node",
 		"module": "ESNext",
 		"declaration": true,
 		"inlineSourceMap": true,
@@ -12,14 +12,6 @@
 		"resolveJsonModule": true,
 
 		"strict": true /* Enable all strict type-checking options. */,
-
-		/* Strict Type-Checking Options */
-		// "noImplicitAny": true /* Raise error on expressions and declarations with an implied 'any' type. */,
-		// "strictNullChecks": true /* Enable strict null checks. */,
-		// "strictFunctionTypes": true /* Enable strict checking of function types. */,
-		// "strictPropertyInitialization": true /* Enable strict checking of property initialization in classes. */,
-		// "noImplicitThis": true /* Raise error on 'this' expressions with an implied 'any' type. */,
-		// "alwaysStrict": true /* Parse in strict mode and emit "use strict" for each source file. */,
 
 		/* Additional Checks */
 		"noUnusedLocals": true /* Report errors on unused locals. */,
@@ -33,11 +25,7 @@
 		"listFiles": false /* Print names of files part of the compilation. */,
 		"pretty": true /* Stylize errors and messages using color and context. */,
 
-		/* Experimental Options */
-		// "experimentalDecorators": true /* Enables experimental support for ES7 decorators. */,
-		// "emitDecoratorMetadata": true /* Enables experimental support for emitting type metadata for decorators. */,
-
-		"lib": ["es2017"],
+		"lib": ["ESNext"],
 		"types": [],
 		"typeRoots": ["node_modules/@types", "src/types"]
 	},
