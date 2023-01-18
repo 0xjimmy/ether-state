@@ -4,14 +4,14 @@
 		"target": "ESNext",
 		"outDir": "build/main",
 		"rootDir": "src",
-		"moduleResolution": "node",
+		"moduleResolution": "NodeNext",
 		"module": "ESNext",
 		"declaration": true,
 		"inlineSourceMap": true,
-		"esModuleInterop": true /* Enables emit interoperability between CommonJS and ES Modules via creation of namespace objects for all imports. Implies 'allowSyntheticDefaultImports'. */,
-		"resolveJsonModule": true /* Include modules imported with .json extension. */,
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
 
-		// "strict": true /* Enable all strict type-checking options. */,
+		"strict": true /* Enable all strict type-checking options. */,
 
 		/* Strict Type-Checking Options */
 		// "noImplicitAny": true /* Raise error on expressions and declarations with an implied 'any' type. */,

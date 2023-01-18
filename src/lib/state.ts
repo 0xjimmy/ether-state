@@ -38,7 +38,7 @@ export class Sync {
 	timeSyncs: { timeout: number; syncs: StateSync[] }[];
 	eventSyncs: { event: any; syncs: StateSync[] }[];
 
-	timeouts = [];
+	timeouts: NodeJS.Timer[];
 
 	constructor(
 		syncs: StateSync[],
@@ -49,6 +49,7 @@ export class Sync {
 			| providers.Web3Provider
 	) {
 		// Set state
+		this.timeouts = [];
 		this.provider = provider;
 		this.multicall = new Contract(
 			'0x5ba1e12693dc8f9c48aad8770482f4739beed696',
@@ -105,7 +106,7 @@ export class Sync {
 					const [blockNumber, _, returnData]: [
 						BigNumber,
 						null,
-						[boolean, BytesLike]
+						[boolean, BytesLike][]
 					] = await this.multicall.callStatic.tryBlockAndAggregate(
 						false,
 						contractCalls
@@ -141,7 +142,7 @@ export class Sync {
 					const [blockNumber, _, returnData]: [
 						BigNumber,
 						null,
-						[boolean, BytesLike]
+						[boolean, BytesLike][]
 					] = result;
 					if (blockNumber.gte(this.blockHeight)) {
 						returnData.forEach((result, index) => {
@@ -162,7 +163,7 @@ export class Sync {
 		// TIME listners
 		if (this.timeSyncs.length > 0) {
 			this.timeouts = this.timeSyncs.map((uniqueTime) => {
-				setInterval(async () => {
+				return setInterval(async () => {
 					const contractCalls = uniqueTime.syncs.map((item) => ({
 						target: item.call.target(),
 						callData: item.call.interface.encodeFunctionData(
@@ -173,7 +174,7 @@ export class Sync {
 					const [blockNumber, _, returnData]: [
 						BigNumber,
 						null,
-						[boolean, BytesLike]
+						[boolean, BytesLike][]
 					] = await this.multicall.callStatic.tryBlockAndAggregate(
 						false,
 						contractCalls
@@ -209,7 +210,7 @@ export class Sync {
 					const [blockNumber, _, returnData]: [
 						BigNumber,
 						null,
-						[boolean, BytesLike]
+						[boolean, BytesLike][]
 					] = await this.multicall.callStatic.tryBlockAndAggregate(
 						false,
 						contractCalls
@@ -246,7 +247,7 @@ export class Sync {
 				const [blockNumber, _, returnData]: [
 					BigNumber,
 					null,
-					[boolean, BytesLike]
+					[boolean, BytesLike][]
 				] = await this.multicall.callStatic.tryBlockAndAggregate(
 					false,
 					contractCalls
@@ -277,7 +278,7 @@ export class Sync {
 			const [blockNumber, _, returnData]: [
 				BigNumber,
 				null,
-				[boolean, BytesLike]
+				[boolean, BytesLike][]
 			] = await this.multicall.callStatic.tryBlockAndAggregate(
 				false,
 				contractCalls
