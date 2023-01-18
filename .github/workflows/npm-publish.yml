@@ -13,12 +13,10 @@ jobs:
               with:
                   node-version: 'v18.13.0'
                   registry-url: 'https://registry.npmjs.org'
-            - name: Install and Build
-              run: |
-                  npm install
-                  npm run build
-            - name: Publish to NPM
+            - name: Build and publish
               env:
                   NPM_TOKEN: '${{ secrets.NPM_TOKEN }}'
               run: |
-                  npm publish
+                  npm install
+                  npm run build
+                  npm publish --access public
