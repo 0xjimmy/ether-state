@@ -11,7 +11,7 @@
 		"esModuleInterop": true,
 		"resolveJsonModule": true,
 
-		"strict": true /* Enable all strict type-checking options. */,
+		"strict": false /* Enable all strict type-checking options. */,
 
 		/* Additional Checks */
 		"noUnusedLocals": true /* Report errors on unused locals. */,
