@@ -1,35 +1,18 @@
 {
 	"compilerOptions": {
-		"incremental": true,
 		"target": "ESNext",
-		"outDir": "build/main",
-		"rootDir": "src",
-		"moduleResolution": "Node",
-		"module": "ESNext",
-		"declaration": true,
-		"inlineSourceMap": true,
+		"module": "CommonJS",
+		"lib": ["esnext"],
+		"moduleResolution": "Node16",
 		"esModuleInterop": true,
+		"strict": true,
+		"strictNullChecks": true,
 		"resolveJsonModule": true,
-
-		"strict": false /* Enable all strict type-checking options. */,
-
-		/* Additional Checks */
-		"noUnusedLocals": true /* Report errors on unused locals. */,
-		"noUnusedParameters": true /* Report errors on unused parameters. */,
-		"noImplicitReturns": true /* Report error when not all code paths in function return a value. */,
-		"noFallthroughCasesInSwitch": true /* Report errors for fallthrough cases in switch statement. */,
-
-		/* Debugging Options */
-		"traceResolution": false /* Report module resolution log messages. */,
-		"listEmittedFiles": false /* Print names of generated files part of the compilation. */,
-		"listFiles": false /* Print names of files part of the compilation. */,
-		"pretty": true /* Stylize errors and messages using color and context. */,
-
-		"lib": ["ESNext"],
-		"types": [],
-		"typeRoots": ["node_modules/@types", "src/types"]
+		"skipLibCheck": true,
+		"skipDefaultLibCheck": true,
+		"outDir": "./dist",
+		"sourceMap": true,
+		"declaration": true
 	},
-	"include": ["src/**/*.ts"],
-	"exclude": ["node_modules/**"],
-	"compileOnSave": false
+	"include": ["src/**/*"]
 }
