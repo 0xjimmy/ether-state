@@ -12,7 +12,6 @@ jobs:
             - uses: actions/setup-node@v3
               with:
                   node-version: 'v18.13.0'
-                  registry-url: 'https://registry.npmjs.org'
             - name: Build and publish
               env:
                   NPM_TOKEN: '${{ secrets.NPM_TOKEN }}'
