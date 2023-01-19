@@ -4,7 +4,7 @@ on:
         branches:
             - master
 jobs:
-    unit-tests:
+    publish:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
@@ -17,6 +17,6 @@ jobs:
               env:
                   NPM_TOKEN: '${{ secrets.NPM_TOKEN }}'
               run: |
-                  npm install
-                  npm run build
+                  yarn
+                  yarn build
                   npm publish --access public
