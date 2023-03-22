@@ -1,9 +1,5 @@
-import { BigNumber, Contract, providers } from 'ethers';
-import { BytesLike, Interface } from 'ethers/lib/utils';
-import multicallABI from './abi/Multicall2.json';
-
-/** @ignore */
-const IMulticall = new Interface(multicallABI);
+import { Provider, Contract, BytesLike, Interface } from 'ethers';
+import { MulticallABI } from './abi';
 
 export enum Trigger {
 	BLOCK,
@@ -26,37 +22,29 @@ export type StateSync = {
 };
 
 export class Sync {
-	provider:
-		| providers.Provider
-		| providers.JsonRpcProvider
-		| providers.WebSocketProvider
-		| providers.Web3Provider;
-	multicall: Contract;
-	blockHeight: BigNumber;
+	public provider: Provider
+	private multicall: Contract;
+	private blockHeight: BigInt;
 
-	blockSyncs: StateSync[];
-	timeSyncs: { timeout: number; syncs: StateSync[] }[];
-	eventSyncs: { event: any; syncs: StateSync[] }[];
+	private blockSyncs: StateSync[];
+	private timeSyncs: { timeout: number; syncs: StateSync[] }[];
+	private eventSyncs: { event: any; syncs: StateSync[] }[];
 
 	timeouts: NodeJS.Timer[];
 
 	constructor(
 		syncs: StateSync[],
-		provider:
-			| providers.Provider
-			| providers.JsonRpcProvider
-			| providers.WebSocketProvider
-			| providers.Web3Provider
+		provider: Provider
 	) {
 		// Set state
 		this.timeouts = [];
 		this.provider = provider;
 		this.multicall = new Contract(
 			'0x5ba1e12693dc8f9c48aad8770482f4739beed696',
-			IMulticall,
+			MulticallABI,
 			this.provider
 		);
-		this.blockHeight = BigNumber.from(0);
+		this.blockHeight = 0n;
 		this.blockSyncs = syncs.filter(
 			(sync) => sync.trigger === Trigger.BLOCK
 		);
@@ -90,10 +78,10 @@ export class Sync {
 
 		// ## LISTNERS
 
-		// BLOCK listener
+		// Block listener
 		this.provider.on('block', async (_blockHeight: number) => {
-			const blockHeight = BigNumber.from(_blockHeight);
-			if (blockHeight.gt(this.blockHeight)) {
+			const blockHeight = BigInt(_blockHeight);
+			if (blockHeight > this.blockHeight) {
 				this.blockHeight = blockHeight;
 				if (this.blockSyncs.length > 0) {
 					const contractCalls = this.blockSyncs.map((item) => ({
@@ -104,14 +92,14 @@ export class Sync {
 						),
 					}));
 					const [blockNumber, , returnData]: [
-						BigNumber,
+						BigInt,
 						null,
 						[boolean, BytesLike][]
-					] = await this.multicall.callStatic.tryBlockAndAggregate(
+					] = await this.multicall.tryBlockAndAggregate.staticCall(
 						false,
 						contractCalls
 					);
-					if (blockNumber.gte(this.blockHeight)) {
+					if (blockNumber >= this.blockHeight) {
 						returnData.forEach((result, index) => {
 							if (result[0]) {
 								const call = this.blockSyncs[index].call;
@@ -133,18 +121,17 @@ export class Sync {
 				target: item.call.target(),
 				callData: item.call.interface.encodeFunctionData(
 					item.call.selector,
-					item.input(BigNumber.from(0))
+					item.input(0n)
 				),
 			}));
-			this.multicall.callStatic
-				.tryBlockAndAggregate(false, contractCalls)
+			this.multicall.tryBlockAndAggregate.staticCall(false, contractCalls)
 				.then((result) => {
 					const [blockNumber, , returnData]: [
-						BigNumber,
+						BigInt,
 						null,
 						[boolean, BytesLike][]
 					] = result;
-					if (blockNumber.gte(this.blockHeight)) {
+					if (blockNumber >= this.blockHeight) {
 						returnData.forEach((result, index) => {
 							if (result[0]) {
 								const call = this.blockSyncs[index].call;
@@ -160,7 +147,7 @@ export class Sync {
 				});
 		}
 
-		// TIME listners
+		// Time listners
 		if (this.timeSyncs.length > 0) {
 			this.timeouts = this.timeSyncs.map((uniqueTime) => {
 				return setInterval(async () => {
@@ -172,14 +159,14 @@ export class Sync {
 						),
 					}));
 					const [blockNumber, , returnData]: [
-						BigNumber,
+						BigInt,
 						null,
 						[boolean, BytesLike][]
-					] = await this.multicall.callStatic.tryBlockAndAggregate(
+					] = await this.multicall.tryBlockAndAggregate.staticCall(
 						false,
 						contractCalls
 					);
-					if (blockNumber.gte(this.blockHeight)) {
+					if (blockNumber >= this.blockHeight) {
 						returnData.forEach((result, index) => {
 							if (result[0]) {
 								const call = uniqueTime.syncs[index].call;
@@ -196,7 +183,7 @@ export class Sync {
 			});
 		}
 
-		// EVENT listers
+		// Event listers
 		if (this.eventSyncs.length > 0) {
 			this.eventSyncs.forEach((uniqueEvent) => {
 				this.provider.on(uniqueEvent.event, async (log, event) => {
@@ -208,14 +195,14 @@ export class Sync {
 						),
 					}));
 					const [blockNumber, , returnData]: [
-						BigNumber,
+						BigInt,
 						null,
 						[boolean, BytesLike][]
-					] = await this.multicall.callStatic.tryBlockAndAggregate(
+					] = await this.multicall.tryBlockAndAggregate.staticCall(
 						false,
 						contractCalls
 					);
-					if (blockNumber.gte(this.blockHeight)) {
+					if (blockNumber >= this.blockHeight) {
 						returnData.forEach((result, index) => {
 							if (result[0]) {
 								const call = uniqueEvent.syncs[index].call;
@@ -245,14 +232,14 @@ export class Sync {
 					),
 				}));
 				const [blockNumber, , returnData]: [
-					BigNumber,
+					BigInt,
 					null,
 					[boolean, BytesLike][]
-				] = await this.multicall.callStatic.tryBlockAndAggregate(
+				] = await this.multicall.tryBlockAndAggregate.staticCall(
 					false,
 					contractCalls
 				);
-				if (blockNumber.gte(this.blockHeight)) {
+				if (blockNumber >= this.blockHeight) {
 					returnData.forEach((result, index) => {
 						if (result[0]) {
 							const call = this.blockSyncs[index].call;
@@ -276,14 +263,14 @@ export class Sync {
 				),
 			}));
 			const [blockNumber, , returnData]: [
-				BigNumber,
+				BigInt,
 				null,
 				[boolean, BytesLike][]
-			] = await this.multicall.callStatic.tryBlockAndAggregate(
+			] = await this.multicall.tryBlockAndAggregate.staticCall(
 				false,
 				contractCalls
 			);
-			if (blockNumber.gte(this.blockHeight)) {
+			if (blockNumber >= this.blockHeight) {
 				returnData.forEach((result, index) => {
 					if (result[0]) {
 						const call = syncs[index].call;
