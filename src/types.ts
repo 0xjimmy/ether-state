@@ -1,10 +1,16 @@
-import { BytesLike, Interface } from 'ethers'
+import { Result, Log, BytesLike, Interface, EventFilter } from 'ethers'
 
-export enum Triggers {
+export enum TriggerType {
 	BLOCK,
 	EVENT,
 	TIME,
 }
+
+export type BlockTrigger = { type: TriggerType.BLOCK }
+export type TimeTrigger = { type: TriggerType.TIME, interval: number }
+export type EventTrigger = { type: TriggerType.EVENT, eventFilter: EventFilter }
+
+export type Trigger = BlockTrigger | EventTrigger | TimeTrigger
 
 export type ContractCall = {
 	target: () => string
@@ -13,24 +19,24 @@ export type ContractCall = {
 }
 
 export type BlockAction = {
-	trigger: { type: Triggers.BLOCK }
+	trigger: BlockTrigger
 	input: (blockNumber: bigint) => Array<bigint | BytesLike | boolean>
 	call: ContractCall
-	output: (returnValues: unknown[], blockNumber: bigint, blockHash: BytesLike) => unknown
+	output: (returnValues: Result, blockNumber: bigint) => unknown
 }
 
 export type TimeAction = {
-	trigger: { type: Triggers.TIME, interval: number }
+	trigger: TimeTrigger
 	input: (currentTime: number) => Array<bigint | BytesLike | boolean>
 	call: ContractCall
-	output: (returnValues: unknown[], blockNumber: bigint, blockHash: BytesLike) => unknown
+	output: (returnValues: Result, blockNumber: bigint) => unknown
 }
 
 export type EventAction = {
-	trigger: { type: Triggers.EVENT, eventFilter: string }
-	input: (blockNumber: bigint, eventParams: unknown[]) => Array<bigint | BytesLike | boolean>
+	trigger: EventTrigger
+	input: (log: Log, blockNumber: bigint) => Array<bigint | BytesLike | boolean>
 	call: ContractCall
-	output: (returnValues: unknown[], blockNumber: bigint, blockHash: BytesLike) => unknown
+	output: (returnValues: Result, blockNumber: bigint) => unknown
 }
 
 export type Action = BlockAction | TimeAction | EventAction

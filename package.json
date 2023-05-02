@@ -1,6 +1,6 @@
 {
 	"name": "ether-state",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Library for syncing state from contracts.",
 	"repository": "git@github.com:0xjimmy/ether-state.git",
 	"author": "James Galbraith <me@0xjimmy.xyz>",

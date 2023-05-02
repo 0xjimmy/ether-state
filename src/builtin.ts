@@ -1,27 +1,58 @@
 import { Interface, getAddress } from "ethers";
-import { ERC20ABI } from "./abi";
-import { BlockAction, EventAction, Triggers } from "./types";
+import { ERC20ABI, MulticallABI } from "./abi";
+import { Action, TriggerType, Trigger } from "./types";
 
-export function createERC20BalanceAction(trigger: Triggers.BLOCK | Triggers.EVENT, tokenAddress: string, tokenOwner: string, setBalance: (balance: bigint) => unknown): BlockAction | EventAction | undefined {
+export function createERC20BalanceAction(trigger: Trigger, tokenAddress: string, tokenOwner: string, setBalance: (balance: bigint) => unknown): Action {
 	try {
 		const token = getAddress(tokenAddress)
 		const owner = getAddress(tokenOwner)
-		if (trigger === Triggers.BLOCK) {
-			return {
-				trigger: { type: Triggers.BLOCK },
-				call: { target: () => token, interface: new Interface(ERC20ABI), selector: 'balanceOf' },
-				input: () => [owner],
-				output: (returnValues) => setBalance(returnValues[0] as bigint)
-			}
+		if (trigger.type === TriggerType.BLOCK) return {
+			trigger,
+			call: { target: () => token, interface: new Interface(ERC20ABI), selector: 'balanceOf' },
+			input: () => [owner],
+			output: (returnValues) => setBalance(returnValues[0] as bigint)
 		}
-		if (trigger === Triggers.EVENT) {
-			return {
-				trigger: { type: Triggers.EVENT, eventFilter: '' },
-				call: { target: () => token, interface: new Interface(ERC20ABI), selector: 'balanceOf' },
-				input: () => [owner],
-				output: (returnValues) => setBalance(returnValues[0] as bigint)
-			}
+		if (trigger.type === TriggerType.TIME) return {
+			trigger,
+			call: { target: () => token, interface: new Interface(ERC20ABI), selector: 'balanceOf' },
+			input: () => [owner],
+			output: (returnValues) => setBalance(returnValues[0] as bigint)
 		}
+		if (trigger.type === TriggerType.EVENT) return {
+			trigger,
+			call: { target: () => token, interface: new Interface(ERC20ABI), selector: 'balanceOf' },
+			input: () => [owner],
+			output: (returnValues) => setBalance(returnValues[0] as bigint)
+		}
+		throw new Error("Invalid Params")
+	} catch {
+		throw new Error("Invalid Address")
+	}
+}
+
+export function createEtherBalanceAction(trigger: Trigger, userAddress: string, setBalance: (balance: bigint) => unknown, multicallAddress?: string): Action {
+	try {
+		const multicall2 = multicallAddress ? getAddress(multicallAddress) : "0x5ba1e12693dc8f9c48aad8770482f4739beed696"
+		const owner = getAddress(userAddress)
+		if (trigger.type === TriggerType.BLOCK) return {
+			trigger: trigger,
+			call: { target: () => multicall2, interface: new Interface(MulticallABI), selector: 'getEthBalance' },
+			input: () => [owner],
+			output: (returnValues: unknown[]) => setBalance(returnValues[0] as bigint)
+		}
+		if (trigger.type === TriggerType.TIME) return {
+			trigger: trigger,
+			call: { target: () => multicall2, interface: new Interface(MulticallABI), selector: 'getEthBalance' },
+			input: () => [owner],
+			output: (returnValues: unknown[]) => setBalance(returnValues[0] as bigint)
+		}
+		if (trigger.type === TriggerType.EVENT) return {
+			trigger: trigger,
+			call: { target: () => multicall2, interface: new Interface(MulticallABI), selector: 'getEthBalance' },
+			input: () => [owner],
+			output: (returnValues: unknown[]) => setBalance(returnValues[0] as bigint)
+		}
+		throw new Error("Invalid Params")
 	} catch {
 		throw new Error("Invalid Address")
 	}

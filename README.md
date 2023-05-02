@@ -72,12 +72,15 @@ const sync = new Sync(syncs, provider);
 
 ## API
 
--   [Sync](#Sync)
--   [StateSync](#StateSync)
--   [Trigger](#Trigger)
--   [ContractCall](#ContractCall)
+-	[EtherState](#EtherState)
+- [Triggers](#Triggers)
+-	[Actions](#Actions)
+	-	[BlockAction](#BlockAction)
+	-	[EventAction](#EventAction)
+	-	[TimeAction](#TimeAction)
 
-### Sync
+### EtherState
+
 
 Takes an array of `StateSyncs` and manages calling contracts based on their triggers.
 

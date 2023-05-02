@@ -1,6 +1,7 @@
+import { Log } from 'ethers'
 import { Provider, Contract, BytesLike } from 'ethers'
 import { MulticallABI } from './abi'
-import { Action, BlockAction, EventAction, TimeAction, Triggers } from './types'
+import { Action, BlockAction, EventAction, TimeAction, TriggerType } from './types'
 
 const MULTICALL2_ADDRESS = '0x5ba1e12693dc8f9c48aad8770482f4739beed696'
 
@@ -9,11 +10,10 @@ export class EtherState {
 
 	private provider: Provider
 	private multicall: Contract
-	// private timeouts: Array<unknown>
 
 	private blockCallback: ((newBlock: number) => Promise<void>) | undefined
 	private timeActions: { intervalsIds: ReturnType<typeof setInterval>[], callbacks: (() => Promise<void>)[] } | undefined
-	// private eventActions: { event: any; syncs: EventAction[] }[]
+	// private events: { intervalsIds: ReturnType<typeof setInterval>[], callbacks: (() => Promise<void>)[] } | undefined
 
 	constructor(
 		actions: Action[],
@@ -31,18 +31,18 @@ export class EtherState {
 		);
 		this.blockNumber = 0n
 
-		const blockActions = actions.filter(({ trigger }) => trigger.type === Triggers.BLOCK) as BlockAction[]
-		const timeActions = actions.filter(({ trigger }) => trigger.type === Triggers.TIME) as TimeAction[]
-		// const eventActions = actions.filter(({ trigger }) => trigger.type === Triggers.EVENT) as EventAction[]
+		const blockActions = actions.filter(({ trigger }) => trigger.type === TriggerType.BLOCK) as BlockAction[]
+		const timeActions = actions.filter(({ trigger }) => trigger.type === TriggerType.TIME) as TimeAction[]
+		const eventActions = actions.filter(({ trigger }) => trigger.type === TriggerType.EVENT) as EventAction[]
 
 		this.blockCallback = this.setupBlockActions(blockActions)
 		this.timeActions = this.setupTimeActions(timeActions)
-		// this.eventActions = this.setupEventActions(eventActions)
+		this.setupEventActions(eventActions)
 
 		// Populate if option selected
 		if (options && 'populateTimeAndBlock' in options && options.populateTimeAndBlock) {
-			this.update(Triggers.BLOCK)
-			this.update(Triggers.TIME)
+			this.update(TriggerType.BLOCK)
+			this.update(TriggerType.TIME)
 		}
 	}
 
@@ -59,14 +59,14 @@ export class EtherState {
 						action.input(blockNumber)
 					),
 				}))
-				const [multicallBlock, multicallBlockHash, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
+				const [multicallBlock, _, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
 					false,
 					contractCalls
 				)
 				// Don't update with old data
 				if (multicallBlock >= this.blockNumber) {
 					results.forEach(({ success, returnData }, index) => {
-						if (success) actions[index].output(actions[index].call.interface.decodeFunctionResult(actions[index].call.selector, returnData), multicallBlock, multicallBlockHash)
+						if (success) actions[index].output(actions[index].call.interface.decodeFunctionResult(actions[index].call.selector, returnData), multicallBlock)
 					})
 				}
 			}
@@ -89,12 +89,12 @@ export class EtherState {
 						action.input(Date.now())
 					),
 				}))
-				const [multicallBlock, multicallBlockHash, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
+				const [multicallBlock, _, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
 					false,
 					contractCalls
 				)
 				results.forEach(({ success, returnData }, index) => {
-					if (success) actions[index].output(actions[index].call.interface.decodeFunctionResult(actions[index].call.selector, returnData), multicallBlock, multicallBlockHash)
+					if (success) actions[index].output(actions[index].call.interface.decodeFunctionResult(actions[index].call.selector, returnData), multicallBlock)
 				})
 			}
 			callbacks.push(callback)
@@ -103,50 +103,39 @@ export class EtherState {
 		return { intervalsIds, callbacks }
 	}
 
-	// // Event listers
-	// if (this.eventSyncs.length > 0) {
-	// 	this.eventSyncs.forEach((uniqueEvent) => {
-	// 		this.provider.on(uniqueEvent.event, async (log, event) => {
-	// 			const contractCalls = uniqueEvent.syncs.map((item) => ({
-	// 				target: item.call.target(),
-	// 				callData: item.call.interface.encodeFunctionData(
-	// 					item.call.selector,
-	// 					item.input(log, event)
-	// 				),
-	// 			}));
-	// 			const [blockNumber, , returnData]: [
-	// 				bigint,
-	// 				null,
-	// 				[boolean, BytesLike][]
-	// 			] = await this.multicall.tryBlockAndAggregate.staticCall(
-	// 				false,
-	// 				contractCalls
-	// 			);
-	// 			if (blockNumber >= this.blockHeight) {
-	// 				returnData.forEach((result, index) => {
-	// 					if (result[0]) {
-	// 						const call = uniqueEvent.syncs[index].call;
-	// 						uniqueEvent.syncs[index].output(
-	// 							call.interface.decodeFunctionResult(
-	// 								call.selector,
-	// 								result[1]
-	// 							)
-	// 						);
-	// 					}
-	// 				});
-	// 			}
-	// 		});
-	// 	});
-	// }
-	// }
+	private setupEventActions(actions: EventAction[]) {
+		if (actions.length === 0) return undefined
+		const uniqueStringifiedEvents = [...new Set(actions.map(({ trigger }) => JSON.stringify(trigger.eventFilter)))]
+		uniqueStringifiedEvents.forEach((stringifiedEvent) => {
+			const matchingActions = actions.filter(({ trigger }) => JSON.stringify(trigger.eventFilter) === stringifiedEvent)
+			const eventFilter = matchingActions[0].trigger.eventFilter
+			this.provider.on(eventFilter, async (log: Log) => {
+				console.log({ log })
+				const contractCalls = matchingActions.map((action) => ({
+					target: action.call.target(),
+					callData: action.call.interface.encodeFunctionData(
+						action.call.selector,
+						action.input(log, BigInt(log.blockNumber))
+					)
+				}))
+				const [multicallBlock, _, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
+					false,
+					contractCalls
+				)
+				results.forEach(({ success, returnData }, index) => {
+					if (success) matchingActions[index].output(matchingActions[index].call.interface.decodeFunctionResult(matchingActions[index].call.selector, returnData), multicallBlock)
+				})
+			})
+		})
+	}
 
 	// Manual update for any TIME or BLOCK actions states
-	async update(type: Triggers.TIME | Triggers.BLOCK) {
-		if (type === Triggers.BLOCK && this.blockCallback) {
+	async update(type: TriggerType.TIME | TriggerType.BLOCK) {
+		if (type === TriggerType.BLOCK && this.blockCallback) {
 			const block = await this.provider.getBlockNumber()
 			this.blockCallback(block)
 		}
-		if (type === Triggers.TIME && this.timeActions) this.timeActions.callbacks.forEach(cb => cb())
+		if (type === TriggerType.TIME && this.timeActions) this.timeActions.callbacks.forEach(cb => cb())
 	}
 
 	// Remove all event listners
