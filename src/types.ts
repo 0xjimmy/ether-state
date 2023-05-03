@@ -20,23 +20,23 @@ export type ContractCall = {
 
 export type BlockAction = {
 	trigger: BlockTrigger
-	input: (blockNumber: bigint) => Array<bigint | BytesLike | boolean>
+	input: (blockNumber: bigint) => Array<bigint | BytesLike | string | boolean>
 	call: ContractCall
 	output: (returnValues: Result, blockNumber: bigint) => unknown
 }
 
 export type TimeAction = {
 	trigger: TimeTrigger
-	input: (currentTime: number) => Array<bigint | BytesLike | boolean>
+	input: (currentTime: number) => Array<bigint | BytesLike | string | boolean>
 	call: ContractCall
 	output: (returnValues: Result, blockNumber: bigint) => unknown
 }
 
 export type EventAction = {
 	trigger: EventTrigger
-	input: (log: Log, blockNumber: bigint) => Array<bigint | BytesLike | boolean>
+	input: (log: Log, blockNumber: bigint) => Array<bigint | BytesLike | string | boolean>
 	call: ContractCall
-	output: (returnValues: Result, blockNumber: bigint) => unknown
+	output: (returnValues: Result, blockNumber: bigint, log: Log) => unknown
 }
 
 export type Action = BlockAction | TimeAction | EventAction

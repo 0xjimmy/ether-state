@@ -110,7 +110,6 @@ export class EtherState {
 			const matchingActions = actions.filter(({ trigger }) => JSON.stringify(trigger.eventFilter) === stringifiedEvent)
 			const eventFilter = matchingActions[0].trigger.eventFilter
 			this.provider.on(eventFilter, async (log: Log) => {
-				console.log({ log })
 				const contractCalls = matchingActions.map((action) => ({
 					target: action.call.target(),
 					callData: action.call.interface.encodeFunctionData(
@@ -123,7 +122,7 @@ export class EtherState {
 					contractCalls
 				)
 				results.forEach(({ success, returnData }, index) => {
-					if (success) matchingActions[index].output(matchingActions[index].call.interface.decodeFunctionResult(matchingActions[index].call.selector, returnData), multicallBlock)
+					if (success) matchingActions[index].output(matchingActions[index].call.interface.decodeFunctionResult(matchingActions[index].call.selector, returnData), multicallBlock, log)
 				})
 			})
 		})
