@@ -1,23 +1,23 @@
 {
-  "name": "ether-state",
-  "version": "0.1.0",
-  "description": "Library for syncing state from contracts.",
-  "repository": "git@github.com:0xjimmy/ether-state.git",
-  "author": "James Galbraith <me@0xjimmy.xyz>",
-  "license": "MIT",
-  "scripts": {
-    "build": "tsc"
-  },
-  "dependencies": {
-    "ethers": "^5.7.2"
-  },
-  "devDependencies": {
-    "@types/node": "^18.11.18",
-    "typescript": "^4.9.4"
-  },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "/dist"
-  ]
+	"name": "ether-state",
+	"version": "0.2.0",
+	"description": "Library for syncing state from contracts.",
+	"repository": "git@github.com:0xjimmy/ether-state.git",
+	"author": "James Galbraith <me@0xjimmy.xyz>",
+	"license": "MIT",
+	"scripts": {
+		"build": "tsc"
+	},
+	"dependencies": {
+		"ethers": "^6.2.0"
+	},
+	"devDependencies": {
+		"@types/node": "^18.11.18",
+		"typescript": "^4.9.4"
+	},
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"files": [
+		"/dist"
+	]
 }
