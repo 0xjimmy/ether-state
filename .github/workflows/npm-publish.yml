@@ -1,22 +1,21 @@
-name: Build and Publish on NPM
+name: Publish
 on:
-    push:
-        branches:
-            - master
+  push:
+    branches:
+      - "master"
+
 jobs:
-    publish:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v3
-            - uses: actions/setup-node@v3
-              with:
-                  node-version: 'v18.13.0'
-                  registry-url: 'https://registry.npmjs.org'
-            - name: Build and publish
-              env:
-                  NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}'
-              run: |
-                  yarn
-                  yarn build
-                  npm publish --access public
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+		  cache: "yarn"
+      - run: yarn install
+      - run: yarn build
+      - uses: JS-DevTools/npm-publish@v2
+        with:
+          token: ${{ secrets.NPM_TOKEN }}
+		  dry-run: true
