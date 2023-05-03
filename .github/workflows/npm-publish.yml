@@ -12,10 +12,10 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: "18"
-		  cache: "yarn"
+	  cache: "yarn"
       - run: yarn install
       - run: yarn build
       - uses: JS-DevTools/npm-publish@v2
         with:
           token: ${{ secrets.NPM_TOKEN }}
-		  dry-run: true
+	  dry-run: true
