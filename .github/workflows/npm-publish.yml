@@ -12,8 +12,8 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: "18"
-      - run: yarn install
-      - run: yarn build
+      - run: npm ci --ignore-scripts
+      - run: npm run build
       - uses: JS-DevTools/npm-publish@v2
         with:
           token: ${{ secrets.NPM_TOKEN }}
