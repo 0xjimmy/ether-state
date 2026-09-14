@@ -6,66 +6,81 @@ Use PRs for changes to both branches. Do not push directly to `release`.
 1. Make a change on a feature branch and open a PR into `main`.
 2. Set the next stable version in `package.json` and `package-lock.json` on `main`.
    Use `npm version patch --no-git-tag-version` when a patch version is required.
-   The first version for this flow is already set to `0.2.2`.
 3. Wait for `Verify` to pass. Review and merge the PR into `main`.
 4. Open a PR with base `release` and head `main`. Review the version and package changes.
 5. Merge that PR with a merge commit. Do not squash or rebase this branch promotion.
-   A merge commit keeps the shared history for the next release.
-6. The push to `release` runs the full CI workflow again.
-7. Approve the `npm` environment job. It publishes the tested npm tarball to `latest`.
+6. The workflow repeats CI, publishes to npm, creates the versioned GitHub Release,
+   and publishes the GitHub Packages copy. No separate deployment approval is required.
 
-A feature PR or a push to `main` cannot start the publish workflow.
-A version that is already on npm is a successful no-op.
-Prerelease versions, version downgrades, and mismatched lockfile versions fail the publish job.
-If publishing fails before npm accepts the package, fix the cause and rerun the job.
-Do not change a published version. Use a new version for a package fix.
-A GitHub release or tag does not start npm publishing in this flow.
+For `0.2.3`, the outputs are:
 
-## One-time hosted setup
+| Destination | Name |
+| --- | --- |
+| npm | `ether-state@0.2.3`, tag `latest` |
+| GitHub Release | Title `v0.2.3`, tag `v0.2.3` |
+| GitHub Packages | `@0xjimmy/ether-state@0.2.3` |
 
-- Make `main` the GitHub default branch. Keep `master` until old links and work are checked.
-- Create `release` from the same starting commit as `main`.
-- Protect `main` and `release`: require a PR and the `Verify` status check, and block force pushes and deletion.
-  Require up-to-date branches on `main`. Leave that option off on `release`: the
-  PR tests run against the proposed merge, and release merge commits must not
-  force a reverse merge into `main`. Release PRs must come from this repository's `main`.
-- Create the GitHub environment `npm`. Allow deployments only from `release`.
-  Add `0xjimmy` as a required reviewer. Permit self-review for the single-maintainer workflow.
-- In the npm settings for `ether-state`, add a GitHub Actions trusted publisher:
-  - Organization or user: `0xjimmy`
-  - Repository: `ether-state`
-  - Workflow filename: `npm-publish.yml`
-  - Environment name: `npm`
-  - Allowed actions: enable `Allow npm publish`.
-- After a successful OIDC publish, remove the unused GitHub `NPM_TOKEN` secret.
-  Revoke the old npm token if it still exists. The token value must not enter source or logs.
-- Select npm's option to require 2FA and disallow bypass tokens after confirming that no other release tools need them.
+The publish job is named `Release v0.2.3`. The deployment environment is named
+`npm` because npm trusted publishing binds to that name. Its URL points to the
+versioned GitHub Release.
 
-The workflow uses a supported npm CLI and Node 24 on a GitHub-hosted runner.
-The publish job has `id-token: write`. It does not use `NPM_TOKEN`.
-See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
+## Package and source checks
 
-## Review findings on 2026-09-14
+The npm tarball is installed and tested before publication. On a release run,
+its manifest includes `gitHead` with the release commit. GitHub publication waits
+for that exact npm version, downloads its tarball, and checks the SHA-512 digest.
+It uses the source commit inside the tarball for the GitHub tag. It rejects an
+existing tag that points to a different commit.
 
-Before these changes, the default branch was `master`. Every push to it ran the
-publish workflow on Node 18 with checkout/setup-node v3 and an npm-publish action.
-The only GitHub secret listed was `NPM_TOKEN`, last updated on 2023-08-31.
-Its value and validity were not inspected.
-There were no branch protection rules, rulesets, or environments. GitHub returned
-no recent workflow runs or releases, so no current hosted success was available.
+The GitHub Packages copy uses the published npm files. Only its package name,
+repository metadata, and publishing configuration change. The npm package keeps
+its unscoped name. CI tests both package names through ESM, CommonJS, declarations,
+and browser code.
 
-npm listed `ether-state@0.2.1` as `latest`, last published on 2023-08-31.
-The signed-in package settings showed `0xjimmy` with write access, no trusted
-publisher, and publishing through 2FA or a granular token with bypass enabled.
+A feature PR or a push to `main` cannot start publishing. Existing npm versions,
+GitHub releases, and GitHub package versions are skipped on reruns. A version
+cannot move the `latest` tag backwards. Prerelease versions and mismatched
+lockfiles fail the workflow. If a later step fails after npm publication, rerun
+the job. It resumes the missing work with the published npm files.
 
-The old lockfile had two high-severity dependency findings. Updating ethers to
-6.17.0 removed them. ethers pins an old Node type package. This package declares
-the current Node 22 types so consumers can check declarations with `skipLibCheck: false`.
+Do not change a published version. Use a new version for a package fix. A GitHub
+release or tag does not start npm publishing in this flow.
 
-## Setup status
+## Hosted settings
 
-`main` is the default branch. Both `main` and `release` exist and require PRs
-with the `Verify` check. The `npm` environment requires approval by `0xjimmy`
-and permits only the `release` branch. These settings are active on GitHub.
-The npm trusted publisher is prepared in the browser but is not saved.
-The first release has not been merged or published.
+`main` is the GitHub default branch. Both `main` and `release` require PRs and the
+`Verify` check. Force pushes and branch deletion are blocked. `main` requires an
+up-to-date PR branch. `release` does not, because its PR checks test the proposed
+merge and release merge commits must not force reverse merges into `main`.
+Release PRs must come from this repository's `main` branch.
+
+The `npm` environment permits only `release`. Its reviewer gate is disabled;
+the release PR merge is the approval point. The npm trusted publisher is saved:
+
+- Organization or user: `0xjimmy`
+- Repository: `ether-state`
+- Workflow filename: `npm-publish.yml`
+- Environment name: `npm`
+- Allowed actions include `npm publish`.
+
+npm uses OIDC with `id-token: write`. GitHub Release and GitHub Packages steps use
+the workflow's `GITHUB_TOKEN` with `contents: write` and `packages: write`. No new
+personal token is required for publishing.
+
+GitHub defaults a newly created package to private. After the first GitHub Packages
+publish, check its package settings and set its visibility to public if needed.
+The repository field links it to this repository. Package readers still need
+GitHub registry authentication, including for public npm packages. Normal users
+can install `ether-state` from npm without this extra setup.
+See [GitHub's npm registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry)
+and [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
+
+Merged feature branches delete automatically. Keep `main` and `release`.
+
+## Initial migration
+
+Before this setup, pushes to `master` published through Node 18 and `NPM_TOKEN`.
+There were no branch protection rules, rulesets, or deployment environments.
+The first OIDC release, `0.2.2`, passed all checks and published successfully.
+The unused GitHub `NPM_TOKEN` secret was removed after that successful publish.
+Revoke its old npm token if it still exists. Do not expose token values in source or logs.
