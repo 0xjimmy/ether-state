@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@types/node": "^22.20.2",
+    "effect": "^4.0.0-rc.115",
     "ethers": "^6.17.0"
   },
   "devDependencies": {

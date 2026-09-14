@@ -6,5 +6,6 @@
     "ignoreDeprecations": "6.0",
     "outDir": "dist/cjs",
     "verbatimModuleSyntax": false
-  }
+  },
+  "exclude": ["src/rpc/**/*.ts"]
 }
