@@ -1,22 +1,57 @@
 {
-	"name": "ether-state",
-	"version": "0.2.1",
-	"description": "Library for syncing state from contracts.",
-	"repository": "git@github.com:0xjimmy/ether-state.git",
-	"author": "James Galbraith <me@0xjimmy.xyz>",
-	"license": "MIT",
-	"scripts": {
-		"build": "tsc"
-	},
-	"dependencies": {
-		"ethers": "^6.7.1"
-	},
-	"devDependencies": {
-		"typescript": "4.9.4"
-	},
-	"main": "dist/index.js",
-	"types": "dist/index.d.ts",
-	"files": [
-		"/dist"
-	]
+  "name": "ether-state",
+  "version": "0.2.2",
+  "description": "Library for syncing state from contracts.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xjimmy/ether-state.git"
+  },
+  "author": "James Galbraith <me@0xjimmy.xyz>",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "node --test test/*.test.mjs",
+    "test:package": "node scripts/test-package.mjs",
+    "test:browser": "playwright test",
+    "check": "npm run typecheck && npm run lint && npm run build && npm test && npm run test:package",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@types/node": "^22.20.2",
+    "ethers": "^6.17.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.10.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.0"
+  },
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "files": [
+    "/dist"
+  ],
+  "type": "module",
+  "module": "./dist/esm/index.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
 }

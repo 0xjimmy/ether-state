@@ -5,6 +5,36 @@ Trigger Ethereum contract calls whenever there is a new block, matching event or
 
 Originally designed for managing state in [Svelte Kit Ethers Template](https://github.com/0xjimmy/svelte-kit-ethers-template).
 
+
+## Runtime support and development
+
+The package provides ESM imports for Node, Bun, and browser bundlers, plus a
+CommonJS entry point for `require`. CI checks Node 22, 24, and 26, the latest Bun,
+and current Chromium, Firefox, and WebKit through Playwright. Browser code uses a
+bundler to resolve the npm dependencies. The output target is ES2022.
+
+```sh
+npm ci --ignore-scripts
+npm run check
+npx playwright install --with-deps chromium firefox webkit
+npm run test:browser
+```
+
+Use Node 24 for development. `npm run check` checks types, runs type-aware lint,
+builds both formats, runs behavior tests, and installs the npm tarball in a clean
+consumer. The consumer checks ESM, CommonJS, and declarations, then builds the
+browser test bundle. `TEST_RUNTIME=bun npm run test:package` checks the same tarball
+with Bun. The RPC tests use fixed responses and ethers ABI encoding. They do not
+verify a live chain or a deployed Multicall contract.
+
+Compiler checks include `strict`, `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noImplicitOverride`, `noPropertyAccessFromIndexSignature`,
+unused code checks, control-flow checks, and isolated declarations. Dependency
+checking stays enabled. The CommonJS build uses TypeScript's legacy Node resolver
+only for emission. Package-consumer tests use the modern Node16 resolver.
+
+See [the release flow](docs/releases.md) for the `main` to `release` process and npm setup.
+
 ## TODO
 - [ ] Start using Multicall3
 - [ ] Add more default actions and action generators  
@@ -13,7 +43,7 @@ Originally designed for managing state in [Svelte Kit Ethers Template](https://g
 
 ```ts
 import { getDefaultProvider, formatEther, Interface, id, Log } from 'ethers';
-import { EtherState, Actions, TriggerType } from 'ether-state';
+import { EtherState, Action, TriggerType } from 'ether-state';
 
 const IERC20 = new Interface([
 	'function totalSupply() external view returns (uint256)',
@@ -22,7 +52,7 @@ const IERC20 = new Interface([
 ]);
 
 // Check totalSupply of DAI every block, check balance of every DAI recipient on Transfer event
-const actions: Actions[] = [
+const actions: Action[] = [
 	{
 		trigger: {
 			type: TriggerType.BLOCK

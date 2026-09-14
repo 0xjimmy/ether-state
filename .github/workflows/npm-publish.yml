@@ -1,19 +1,36 @@
 name: Publish
+
 on:
   push:
-    branches:
-      - "master"
+    branches: [release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
 
 jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: check
     runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          node-version: "18"
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11.11.1
       - run: npm ci --ignore-scripts
       - run: npm run build
-      - uses: JS-DevTools/npm-publish@v2
-        with:
-          token: ${{ secrets.NPM_TOKEN }}
+      - run: npm run test:package
+      - name: Validate version and publish package
+        run: node scripts/publish.mjs
