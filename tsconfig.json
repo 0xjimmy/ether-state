@@ -1,18 +1,40 @@
 {
-	"compilerOptions": {
-		"target": "ESNext",
-		"module": "CommonJS",
-		"lib": ["esnext"],
-		"moduleResolution": "Node16",
-		"esModuleInterop": true,
-		"strict": true,
-		"strictNullChecks": true,
-		"resolveJsonModule": true,
-		"skipLibCheck": true,
-		"skipDefaultLibCheck": true,
-		"outDir": "./dist",
-		"sourceMap": true,
-		"declaration": true
-	},
-	"include": ["src/**/*"]
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [],
+    "rootDir": "src",
+    "outDir": "dist/esm",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": false,
+    "noEmitOnError": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "inlineSources": true,
+    "isolatedDeclarations": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
 }
