@@ -9,28 +9,27 @@
   "author": "James Galbraith <me@0xjimmy.xyz>",
   "license": "MIT",
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "bun scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
-    "test": "node --test test/*.test.mjs",
-    "test:package": "node scripts/test-package.mjs",
-    "test:browser": "playwright test",
-    "check": "npm run typecheck && npm run lint && npm run build && npm test && npm run test:package",
-    "prepack": "npm run build"
+    "lint": "eslint src examples",
+    "test": "bun test",
+    "test:live": "bun test ./test/rpc.live.test.mjs",
+    "test:package": "bun scripts/test-package.mjs",
+    "check": "bun run typecheck && bun run lint && bun test && bun run build && bun run test:package",
+    "prepack": "bun run build"
   },
   "dependencies": {
-    "@types/node": "^22.20.2",
     "effect": "^4.0.0-rc.115",
     "ethers": "^6.17.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
-    "esbuild": "0.28.2",
+    "@types/node": "^22.20.2",
     "eslint": "10.10.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.0"
   },
-  "main": "./dist/cjs/index.js",
+  "packageManager": "bun@1.3.3",
+  "main": "./dist/cjs/index.cjs",
   "types": "./dist/esm/index.d.ts",
   "files": [
     "/dist"
@@ -44,8 +43,8 @@
         "default": "./dist/esm/index.js"
       },
       "require": {
-        "types": "./dist/cjs/index.d.ts",
-        "default": "./dist/cjs/index.js"
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/cjs/index.cjs"
       }
     },
     "./package.json": "./package.json"

@@ -1,6 +1,6 @@
-import { Effect, Stream } from "effect"
+import { Effect, Schedule, Stream } from "effect"
 import type { EvmClient, EvmClientError } from "./client.js"
-import type { RpcFilter, RpcLog, RpcLogFilter } from "./schema.js"
+import type { RpcBlock, RpcFilter, RpcLog, RpcLogFilter, RpcTransaction, RpcReceipt } from "./schema.js"
 
 export interface HistoricalLogsRequest {
 	readonly fromBlock: bigint
@@ -47,6 +47,13 @@ export type RpcHistoryError = InvalidHistoricalRange | HistoricalRangeUnavailabl
 interface BlockRange {
 	readonly fromBlock: bigint
 	readonly toBlock: bigint
+}
+
+export interface HistoricalBlocksRequest {
+	readonly fromBlock: bigint
+	readonly toBlock: bigint
+	readonly concurrency?: number
+	readonly full?: boolean
 }
 
 const defaultChunkSize = 1_000n
@@ -101,16 +108,31 @@ export class RpcHistory {
 	streamLogPages(request: HistoricalLogsRequest): Stream.Stream<HistoricalLogPage, RpcHistoryError> {
 		const chunkSize = request.chunkSize ?? defaultChunkSize
 		const concurrency = request.concurrency ?? defaultConcurrency
-		if (request.fromBlock > request.toBlock || chunkSize <= 0n || !Number.isSafeInteger(concurrency) || concurrency < 1) {
+		if (request.fromBlock < 0n || request.fromBlock > request.toBlock || chunkSize <= 0n || !Number.isSafeInteger(concurrency) || concurrency < 1) {
 			return Stream.fail({
 				_tag: "InvalidHistoricalRange",
 				fromBlock: request.fromBlock,
 				toBlock: request.toBlock,
 			})
 		}
-		return Stream.fromIterable(ranges(request.fromBlock, request.toBlock, chunkSize)).pipe(
-			Stream.mapEffect((range) => this.fetchRange(range, request.filter ?? {}), { concurrency, unordered: false }),
-		)
+		return Stream.fromIterable(ranges(request.fromBlock, request.toBlock, chunkSize)).pipe(Stream.grouped(concurrency),
+			Stream.flatMap((window) => Stream.suspend(() => {
+				let cursor = window[0].fromBlock
+				const ready = new Map<bigint, HistoricalLogPage>()
+				return Stream.mergeAll(window.map((range) => this.streamRange(range, request.filter ?? {})), { concurrency }).pipe(
+					Stream.map((page) => {
+						ready.set(page.fromBlock, page)
+						const output: HistoricalLogPage[] = []
+						while (ready.has(cursor)) {
+							const next = ready.get(cursor)
+							if (next === undefined) break
+							ready.delete(cursor)
+							output.push(next)
+							cursor = next.toBlock + 1n
+						}
+						return output
+					}), Stream.flattenIterable)
+			})))
 	}
 
 	streamLogs(request: HistoricalLogsRequest): Stream.Stream<HistoricalRpcLog, RpcHistoryError> {
@@ -121,28 +143,60 @@ export class RpcHistory {
 		return this.streamLogs(request).pipe(Stream.runCollect)
 	}
 
-	private fetchRange(
+	streamBlocks(request: HistoricalBlocksRequest): Stream.Stream<RpcBlock, RpcHistoryError> {
+		if (request.fromBlock < 0n || request.fromBlock > request.toBlock || !Number.isSafeInteger(request.concurrency ?? 4) || (request.concurrency ?? 4) < 1) {
+			return Stream.fail<InvalidHistoricalRange>({ _tag: "InvalidHistoricalRange", ...request })
+		}
+		return Stream.fromIterable(ranges(request.fromBlock, request.toBlock, 1n)).pipe(Stream.mapEffect((range) =>
+			this.client.fetchOne({ method: "eth_getBlockByNumber", params: [range.fromBlock, request.full ?? false] }).pipe(
+				Effect.flatMap((block) => block?.number === range.fromBlock ? Effect.succeed(block) : Effect.fail({ _tag: "BlockUnavailable" } as const)),
+				Effect.mapError((cause): HistoricalRangeUnavailable => ({ _tag: "HistoricalRangeUnavailable", ...range, cause }))),
+		{ concurrency: request.concurrency ?? 4, unordered: false }))
+	}
+
+	getBlocks(request: HistoricalBlocksRequest): Effect.Effect<readonly RpcBlock[], RpcHistoryError> {
+		return this.streamBlocks(request).pipe(Stream.runCollect)
+	}
+
+	streamTransactions(request: HistoricalBlocksRequest): Stream.Stream<RpcTransaction, RpcHistoryError> {
+		return this.streamBlocks({ ...request, full: true }).pipe(Stream.map((block) => block.transactions.filter((tx) => typeof tx !== "string")), Stream.flattenIterable)
+	}
+
+	getTransactions(request: HistoricalBlocksRequest): Effect.Effect<readonly RpcTransaction[], RpcHistoryError> {
+		return this.streamTransactions(request).pipe(Stream.runCollect)
+	}
+
+	streamReceipts(request: HistoricalBlocksRequest): Stream.Stream<RpcReceipt, RpcHistoryError> {
+		return this.streamBlocks(request).pipe(Stream.mapEffect((block) => this.client.fetchOne({ method: "eth_getBlockReceipts", params: [block.number] }).pipe(
+			Effect.flatMap((receipts) => receipts !== null && receipts.length === block.transactions.length && receipts.every((receipt) => receipt.blockHash === block.hash)
+				? Effect.succeed(receipts) : Effect.fail({ _tag: "BlockUnavailable" } as const)),
+			Effect.mapError((cause): HistoricalRangeUnavailable => ({ _tag: "HistoricalRangeUnavailable", fromBlock: block.number, toBlock: block.number, cause }))),
+		{ concurrency: request.concurrency ?? 4, unordered: false }), Stream.flattenIterable)
+	}
+
+	getReceipts(request: HistoricalBlocksRequest): Effect.Effect<readonly RpcReceipt[], RpcHistoryError> {
+		return this.streamReceipts(request).pipe(Stream.runCollect)
+	}
+
+	private streamRange(
 		range: BlockRange,
 		filter: RpcLogFilter,
-	): Effect.Effect<HistoricalLogPage, RpcHistoryError> {
+	): Stream.Stream<HistoricalLogPage, RpcHistoryError> {
 		const rpcFilter: RpcFilter = { ...filter, ...range }
-		return this.client.fetch({ method: "eth_getLogs", params: [rpcFilter] }).pipe(
+		return Stream.fromEffect(this.client.fetchOne({ method: "eth_getLogs", params: [rpcFilter] }).pipe(
+			Effect.retry({ times: 2, schedule: Schedule.spaced(500), while: (error) => !shouldSplit(error) && error._tag !== "SchemaError" &&
+				!(error._tag === "RpcError" && (error.code === -32602 || error.code === -32601)) }),
 			Effect.flatMap((logs) => normalizeLogs(logs, range)),
 			Effect.map((logs) => ({ ...range, logs })),
-			Effect.catchIf(
+		)).pipe(Stream.catchIf(
 				(error): error is EvmClientError => "_tag" in error && error._tag !== "InvalidHistoricalLog",
 				(error) => {
 					if (!shouldSplit(error) || range.fromBlock === range.toBlock) {
-						return Effect.fail<HistoricalRangeUnavailable>({ _tag: "HistoricalRangeUnavailable", ...range, cause: error })
+						return Stream.fail<HistoricalRangeUnavailable>({ _tag: "HistoricalRangeUnavailable", ...range, cause: error })
 					}
 					const middle = (range.fromBlock + range.toBlock) / 2n
-					return Effect.all([
-						this.fetchRange({ fromBlock: range.fromBlock, toBlock: middle }, filter),
-						this.fetchRange({ fromBlock: middle + 1n, toBlock: range.toBlock }, filter),
-					], { concurrency: 1 }).pipe(Effect.map(([left, right]) => ({
-						...range,
-						logs: [...left.logs, ...right.logs],
-					})))
+					return Stream.concat(this.streamRange({ fromBlock: range.fromBlock, toBlock: middle }, filter),
+						this.streamRange({ fromBlock: middle + 1n, toBlock: range.toBlock }, filter))
 				},
 			),
 		)

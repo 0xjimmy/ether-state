@@ -2,14 +2,17 @@ import { Cause, Effect, Exit, Option, Schema, Scope, Semaphore, Stream, Subscrip
 import { HttpClient } from "effect/unstable/http"
 import type { Socket } from "effect/unstable/socket"
 import { getRpcEndpoints, type ChainListError, type RpcEndpoints } from "./chainList.js"
-import { estimateBlockTime, type BlockTimeUnavailable } from "./blockTime.js"
-import { ethHttpRpc, type RpcHttpError } from "./http.js"
+import { estimateBlockTime, type BlockTimeUnavailable } from "./live.js"
+import { ethHttpRpc, HttpBatcher, type RpcHttpError } from "./transport/http.js"
+import { MulticallReads, multicallAddress, type ContractRead, type CallError } from "./multicall.js"
+import { RequestScheduler } from "./transport/queue.js"
+import { callChanges, makeWatchedState, matchesLog, type WatchCallOptions, type WatchedCall, type WatchedState } from "./watch.js"
 import { RpcHistory } from "./history.js"
 import { LiveBlocks, type BlockPlan, type ReceiptBlockUpdate } from "./live.js"
 import { RpcQueryCoordinator, rpcQueryKey, type RpcQueryCacheStats } from "./query.js"
 import { getRpcMethod, type HttpRpcMethodName, type RpcBlock, type RpcMethodName, type RpcParams,
-	type RpcResult, type RpcTransaction } from "./schema.js"
-import { ethWsRpc, ethWsRpcOnce, ethWsWatchNewHeads, ethWsWatchReceipts, makeWsState, type RpcWsError, type WsState } from "./ws.js"
+	type RpcResult, type RpcTransaction, type RpcLog, type RpcLogFilter } from "./schema.js"
+import { ethWsRpc, ethWsRpcOnce, ethWsWatchNewHeads, ethWsWatchReceipts, makeWsState, watchSubscription, type RpcWsError, type WsState } from "./transport/ws.js"
 
 export type RpcTransport = "http" | "ws"
 
@@ -26,6 +29,11 @@ export interface EvmClientConfig {
 		readonly observationLimit?: number
 		readonly queryCacheSize?: number
 		readonly requestTimeout?: number
+		readonly batchWindow?: number
+		readonly batchSize?: number
+		readonly maxQueuedRequests?: number
+		readonly maxRequestsPerSecond?: number
+		readonly maxConcurrentRequests?: number
 	}
 }
 
@@ -86,7 +94,7 @@ export type EndpointStatus =
 export interface EndpointState extends EndpointSource {
 	readonly status: EndpointStatus
 	readonly observations: readonly EndpointObservation[]
-	readonly unsupportedMethods?: readonly HedgeableRpcMethodName[]
+	readonly unsupportedMethods?: readonly HttpRpcMethodName[]
 }
 
 export interface InsufficientHealthyEndpoints {
@@ -134,6 +142,11 @@ interface ClientOptions {
 	readonly observationLimit: number
 	readonly queryCacheSize: number
 	readonly requestTimeout: number
+	readonly batchWindow: number
+	readonly batchSize: number
+	readonly maxQueuedRequests: number
+	readonly maxRequestsPerSecond: number
+	readonly maxConcurrentRequests: number
 }
 
 interface ProbeSuccess extends EndpointSource {
@@ -177,6 +190,11 @@ const defaultOptions: ClientOptions = {
 	observationLimit: 15,
 	queryCacheSize: 128,
 	requestTimeout: 8_000,
+	batchWindow: 100,
+	batchSize: 20,
+	maxQueuedRequests: 1_024,
+	maxRequestsPerSecond: 20,
+	maxConcurrentRequests: 20,
 }
 
 const resolveOptions = (options: EvmClientConfig["options"]): ClientOptions => ({
@@ -186,6 +204,11 @@ const resolveOptions = (options: EvmClientConfig["options"]): ClientOptions => (
 	observationLimit: options?.observationLimit ?? defaultOptions.observationLimit,
 	queryCacheSize: options?.queryCacheSize ?? defaultOptions.queryCacheSize,
 	requestTimeout: options?.requestTimeout ?? defaultOptions.requestTimeout,
+	batchWindow: options?.batchWindow ?? defaultOptions.batchWindow,
+	batchSize: options?.batchSize ?? defaultOptions.batchSize,
+	maxQueuedRequests: options?.maxQueuedRequests ?? defaultOptions.maxQueuedRequests,
+	maxRequestsPerSecond: options?.maxRequestsPerSecond ?? defaultOptions.maxRequestsPerSecond,
+	maxConcurrentRequests: options?.maxConcurrentRequests ?? defaultOptions.maxConcurrentRequests,
 })
 
 const hashPattern = /^0x[0-9a-fA-F]{64}$/
@@ -448,6 +471,10 @@ export class EvmClient {
 	private fullBlocks: Stream.Stream<FullBlockUpdate>
 	private receiptBlocks: Stream.Stream<ReceiptBlockUpdate>
 	private readonly retryAt = new Map<string, number>()
+	private readonly httpBatches = new Map<string, HttpBatcher>()
+	private readonly reads: MulticallReads
+	private readonly scheduler: RequestScheduler
+	private readonly callStreams = new Map<string, Stream.Stream<WatchedCall<string>, CallError | Schema.SchemaError>>()
 
 	private constructor(
 		readonly config: ResolvedEvmClientConfig,
@@ -462,6 +489,10 @@ export class EvmClient {
 		private readonly queries: RpcQueryCoordinator,
 		private readonly live: LiveBlocks,
 	) {
+		this.scheduler = new RequestScheduler({ rps: options.maxRequestsPerSecond, concurrency: options.maxConcurrentRequests, capacity: options.maxQueuedRequests })
+		this.reads = new MulticallReads({ scope: wsScope, window: options.batchWindow, size: options.batchSize, capacity: options.maxQueuedRequests,
+			fetch: (transaction, block) => this.fetch({ method: "eth_call", params: [transaction, block] }),
+			code: (block) => this.fetch({ method: "eth_getCode", params: [multicallAddress, block] }) })
 		this.blocks = SubscriptionRef.changes(head).pipe(
 			Stream.filter(Option.isSome),
 			Stream.map((value) => value.value),
@@ -480,7 +511,7 @@ export class EvmClient {
 			const options = resolveOptions(config.options)
 			for (const [option, value] of Object.entries({ ...options, blockTime: config.network.blockTime })) {
 				if (value === undefined) continue
-				const minimum = option === "concurrentHttp" || option === "concurrentWs" || option === "queryCacheSize" ? 0 : 1
+				const minimum = option === "concurrentHttp" || option === "concurrentWs" || option === "queryCacheSize" || option === "batchWindow" ? 0 : 1
 				if (!Number.isSafeInteger(value) || value < minimum) {
 					return yield* Effect.fail<InvalidClientConfig>({ _tag: "InvalidClientConfig", option })
 				}
@@ -600,6 +631,94 @@ export class EvmClient {
 
 	get queryCache(): Effect.Effect<RpcQueryCacheStats> {
 		return this.queries.stats
+	}
+
+	get metrics(): { readonly multicall: { readonly batches: number; readonly calls: number }; readonly http: readonly { readonly endpoint: string; readonly envelopes: number; readonly requests: number; readonly batches: number; readonly maxRps: number }[] } {
+		return { multicall: { ...this.reads.stats }, http: [...this.httpBatches].map(([endpoint, batch]) => ({ endpoint, ...batch.stats, maxRps: this.scheduler.limit(endpoint) })) }
+	}
+
+	call(read: ContractRead): Effect.Effect<string, CallError> {
+		return Effect.gen({ self: this }, function* () {
+			const head = yield* this.getBlock()
+			const reference = read.block ?? head.number
+			if (reference === "pending") return yield* this.fetch({ method: "eth_call", params: [read.transaction, reference] })
+			let number = head.number
+			let hash = head.hash
+			if (reference !== head.number) {
+				const hashReference = typeof reference === "object" && "blockHash" in reference ? reference.blockHash
+					: typeof reference === "string" && hashPattern.test(reference) ? reference : undefined
+				const numberReference = typeof reference === "bigint" ? reference : typeof reference === "object"
+					? "blockNumber" in reference ? reference.blockNumber : head.number
+					: hashReference !== undefined ? head.number : /^0x[\da-f]+$/i.test(reference) ? BigInt(reference)
+						: yield* Schema.decodeUnknownEffect(Schema.Literals(["earliest", "finalized", "safe", "latest", "pending"]))(reference)
+				const block = yield* hashReference !== undefined
+					? this.fetchOne({ method: "eth_getBlockByHash", params: [hashReference, false] })
+					: this.fetchOne({ method: "eth_getBlockByNumber", params: [numberReference, false] })
+				if (block === null) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
+				number = block.number
+				hash = block.hash
+			}
+			const block = hash === null ? number : { blockHash: hash, requireCanonical: true }
+			yield* Schema.encodeEffect(getRpcMethod("eth_call").request)({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [read.transaction, block] })
+			return yield* this.reads.request({ ...read, block, blockNumber: number })
+		})
+	}
+
+	watchLogs(filter: RpcLogFilter = {}): Stream.Stream<RpcLog> {
+		return this.receiptBlocks.pipe(Stream.map((block) => block.logs.filter((log) => matchesLog(log, filter))), Stream.flattenIterable)
+	}
+
+	watchTransactions(filter: { readonly from?: string; readonly to?: string } = {}): Stream.Stream<RpcTransaction> {
+		return this.fullBlocks.pipe(Stream.map((head) => head.block.transactions.filter((tx) =>
+			(filter.from === undefined || tx.from.toLowerCase() === filter.from.toLowerCase()) &&
+			(filter.to === undefined || tx.to?.toLowerCase() === filter.to.toLowerCase()))), Stream.flattenIterable)
+	}
+
+	watchCall<A>(options: WatchCallOptions<A>): Stream.Stream<WatchedCall<A>, CallError | Schema.SchemaError> {
+		const key = JSON.stringify(options.transaction, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value) + String(options.multicall)
+		return Stream.unwrap(Effect.gen({ self: this }, function* () {
+			let shared = this.callStreams.get(key)
+			if (shared === undefined) {
+				shared = yield* callChanges(this, { transaction: options.transaction, ...(options.multicall === undefined ? {} : { multicall: options.multicall }),
+					decode: Effect.succeed }).pipe(Stream.share({ capacity: 16, replay: 1 }), Scope.provide(this.wsScope))
+				this.callStreams.set(key, shared)
+			}
+			return shared.pipe(Stream.mapEffect((entry) => options.decode(entry.value).pipe(Effect.map((value) => ({ ...entry, value })))),
+				Stream.changesWith((a, b) => options.equals?.(a.value, b.value) ?? false))
+		}))
+	}
+
+	watchState<A>(options: WatchCallOptions<A>): Effect.Effect<{ readonly current: Effect.Effect<WatchedState<A>>; readonly changes: Stream.Stream<WatchedState<A>> }, never, Scope.Scope> {
+		return makeWatchedState(this, options)
+	}
+
+	subscribe<A, I>(options: { readonly params: RpcParams<"eth_subscribe">; readonly schema: Schema.Codec<A, I> }): Stream.Stream<A, RpcWsError> {
+		return SubscriptionRef.changes(this.activeWs).pipe(Stream.switchMap((active) => {
+			const first = active[0]
+			return first === undefined ? Stream.fail({ _tag: "RpcError", code: -32004, message: "No active WS endpoint" } as const)
+				: watchSubscription(first.state, options.params, options.schema).pipe(Stream.map((notification) => notification.value))
+		}))
+	}
+
+	sendRawTransaction(raw: string): Effect.Effect<string, EvmClientError> {
+		return Effect.gen({ self: this }, function* () {
+			yield* Schema.encodeEffect(getRpcMethod("eth_sendRawTransaction").request)({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] })
+			const sources = [...(yield* this.endpoints).values()].filter((endpoint) => endpoint.status._tag === "Selected")
+			if (sources.length === 0) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
+			const results = yield* Effect.forEach(sources, (source) => Effect.exit(this.requestAt(source, { method: "eth_sendRawTransaction", params: [raw] })), { concurrency: "unbounded" })
+			for (const result of results) if (Exit.isSuccess(result)) return result.value
+			return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
+		})
+	}
+
+	fetchOne<Method extends HedgeableRpcMethodName>(request: { readonly method: Method; readonly params: RpcParams<Method> }): Effect.Effect<RpcResult<Method>, EvmClientError> {
+		return Effect.gen({ self: this }, function* () {
+			const endpoints = [...(yield* this.endpoints).values()].filter((endpoint) => endpoint.transport === "http" &&
+				(endpoint.status._tag === "Selected" || endpoint.status._tag === "Standby") && !endpoint.unsupportedMethods?.includes(request.method))
+				.sort((a, b) => this.scheduler.load(a.endpoint) - this.scheduler.load(b.endpoint))
+			if (endpoints.length === 0) return yield* this.fetch(request)
+			return yield* Effect.firstSuccessOf(endpoints.map((source) => this.requestAt(source, request, true)))
+		})
 	}
 
 	watchBlocks(options: { readonly full: true; readonly logs: true }): Stream.Stream<ReceiptBlockUpdate>
@@ -808,7 +927,7 @@ export class EvmClient {
 				...activeWs.map(({ state }): EndpointSource => ({ endpoint: state.endpoint, transport: "ws" })),
 			]
 			if (sources.length === 0) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
-			const attempts = sources.map((source) => this.requestAt(source, request).pipe(
+			const attempts = sources.map((source) => this.requestAt(source, request, true).pipe(
 				Effect.flatMap((result) => accept(result) ? Effect.succeed({ ...source, result })
 					: Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })),
 			))
@@ -836,11 +955,12 @@ export class EvmClient {
 		})))
 	}
 
-	private requestAt<Method extends HedgeableRpcMethodName>(source: EndpointSource, request: {
+	private requestAt<Method extends HttpRpcMethodName>(source: EndpointSource, request: {
 		readonly method: Method; readonly params: RpcParams<Method>
-	}): Effect.Effect<RpcResult<Method>, EvmClientError> {
+	}, batch = false): Effect.Effect<RpcResult<Method>, EvmClientError> {
 		const effect = source.transport === "http"
-			? ethHttpRpc({ method: request.method, endpoint: source.endpoint, inputParams: request.params }).pipe(
+			? ethHttpRpc({ method: request.method, endpoint: source.endpoint, inputParams: request.params,
+				...(batch ? { batch: this.httpBatcher(source.endpoint) } : {}) }).pipe(
 				Effect.provideService(HttpClient.HttpClient, this.httpClient))
 			: SubscriptionRef.get(this.activeWs).pipe(Effect.flatMap((active): Effect.Effect<RpcResult<Method>, EvmClientError> => {
 				const match = active.find(({ state }) => state.endpoint === source.endpoint)
@@ -851,9 +971,9 @@ export class EvmClient {
 			const delay = (this.retryAt.get(source.endpoint) ?? 0) - Date.now()
 			return delay > 0 ? Effect.sleep(delay).pipe(Effect.andThen(ready)) : Effect.void
 		})
-		return ready.pipe(Effect.andThen(this.tracked({ source, method: request.method, effect: timeoutRequest({
+		return this.scheduler.run(source.endpoint, !batch, ready.pipe(Effect.andThen(this.tracked({ source, method: request.method, effect: timeoutRequest({
 			source, method: request.method, timeout: this.options.requestTimeout, effect,
-		}) })),
+		}) })))).pipe(
 			Effect.map(({ result }) => result),
 			Effect.tapError((error) => Effect.sync(() => {
 				let delay = 0
@@ -866,7 +986,10 @@ export class EvmClient {
 				} else if (error._tag === "RpcError" && /rate limit|too many|quota|limit exceeded/i.test(error.message)) {
 					delay = 1_000
 				}
-				if (delay > 0) this.retryAt.set(source.endpoint, Math.max(this.retryAt.get(source.endpoint) ?? 0, Date.now() + delay))
+				if (delay > 0) {
+					this.scheduler.throttle(source.endpoint)
+					this.retryAt.set(source.endpoint, Math.max(this.retryAt.get(source.endpoint) ?? 0, Date.now() + delay))
+				}
 			})),
 			Effect.tapError((error) => error._tag === "RpcError" && (error.code === -32601 || error.code === -32004)
 				? SubscriptionRef.update(this.endpointState, (endpoints) => {
@@ -876,6 +999,15 @@ export class EvmClient {
 					})
 				}) : Effect.void),
 		)
+	}
+
+	private httpBatcher(endpoint: string): HttpBatcher {
+		const existing = this.httpBatches.get(endpoint)
+		if (existing !== undefined) return existing
+		const batch = new HttpBatcher({ endpoint, client: this.httpClient, scope: this.wsScope,
+			window: this.options.batchWindow, size: this.options.batchSize, capacity: this.options.maxQueuedRequests, timeout: this.options.requestTimeout })
+		this.httpBatches.set(endpoint, batch)
+		return batch
 	}
 
 	private fetchReceipts(source: EndpointSource, plan: BlockPlan): Effect.Effect<void, EvmClientError> {

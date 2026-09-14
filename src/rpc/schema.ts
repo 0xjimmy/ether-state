@@ -62,7 +62,10 @@ const BytesMax32 = Schema.String.check(Schema.isPattern(/^0x[0-9a-fA-F]{0,64}$/)
 const DecimalQuantity = Schema.String.check(Schema.isPattern(/^(?:0|[1-9][0-9]*)$/))
 const BlockTag = Schema.Literals(["earliest", "finalized", "safe", "latest", "pending"])
 const BlockNumberOrTag = Schema.Union([QuantityFromHex, BlockTag])
-const BlockNumberOrTagOrHash = Schema.Union([BlockNumberOrTag, Hash32])
+const BlockNumberOrTagOrHash = Schema.Union([BlockNumberOrTag, Hash32,
+	Schema.Struct({ blockHash: Hash32, requireCanonical: Schema.optional(Schema.Boolean) }),
+	Schema.Struct({ blockNumber: QuantityFromHex }),
+])
 
 const nullable = <S extends Schema.Top>(schema: S) => Schema.Union([schema, Schema.Null])
 const JsonRecord = Schema.Record(Schema.String, Schema.Json)
@@ -220,7 +223,7 @@ const optionalNumberedBlock = <A extends Schema.Top>(first: A) => Schema.Union([
 
 export type RpcHex = string
 export type RpcBlockTag = "earliest" | "finalized" | "safe" | "latest" | "pending"
-export type RpcBlockReference = bigint | RpcHex
+export type RpcBlockReference = bigint | RpcHex | { readonly blockHash: RpcHex; readonly requireCanonical?: boolean | undefined } | { readonly blockNumber: bigint }
 export interface RpcTransactionRequest {
 	readonly type?: RpcHex | undefined
 	readonly nonce?: bigint | undefined

@@ -21,7 +21,7 @@ import {
 	type RpcResult,
 	type RpcReceipt,
 	type WsRpcMethodName,
-} from "./schema.js"
+} from "../schema.js"
 
 export interface WsRequestTimeout {
 	readonly _tag: "WsRequestTimeout"
@@ -269,7 +269,7 @@ export const ethWsRpcOnce = <Method extends WsRpcMethodName>(
 	return yield* state.request(options)
 }))
 
-const watchSubscription = <A, I>(
+export const watchSubscription = <A, I>(
 	state: WsState,
 	params: RpcParams<"eth_subscribe">,
 	schema: Schema.Codec<A, I>,

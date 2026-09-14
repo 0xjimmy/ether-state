@@ -8,8 +8,6 @@
       "DOM"
     ],
     "types": [],
-    "rootDir": "src",
-    "outDir": "dist/esm",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -35,6 +33,7 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "examples/**/*.ts"
   ]
 }

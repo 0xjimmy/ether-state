@@ -2,8 +2,8 @@ import { Effect, Stream } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { Socket } from "effect/unstable/socket"
 import { getAddress, id } from "ethers"
-import { EvmClient } from "./client.js"
-import type { RpcLog } from "./schema.js"
+import { EvmClient } from "../../src/index.js"
+import type { RpcLog } from "../../src/rpc/schema.js"
 
 const usdcAddress = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".toLowerCase()
 const transferTopic = id("Transfer(address,address,uint256)")
@@ -50,10 +50,10 @@ const program = Effect.scoped(Effect.gen(function* () {
 	console.log("watching new blocks; press Ctrl+C to stop")
 	return yield* Effect.all([
 		Effect.gen(function* () {
-			const client = yield* EvmClient.make({ network: { chainId: 8453n } })
+			const client = yield* EvmClient.make({ network: { chainId: 4663n } })
 			console.log("client initialized", client.config.network)
 			return yield* client.watchBlocks({ full: true, logs: true }).pipe(Stream.runForEach((head) => Effect.sync(() => {
-				console.log("block (8453 full)", {
+				console.log(`block (${client.config.network.chainId.toString()} full)`, {
 					number: head.number,
 					hash: head.hash,
 					gasUsed: head.block.gasUsed,
@@ -64,7 +64,7 @@ const program = Effect.scoped(Effect.gen(function* () {
 					observedAt: head.observedAt,
 					latencyMs: head.latencyMs,
 				})
-				logUsdcTransfers(head.logs)
+				if (client.config.network.chainId === 8453n) logUsdcTransfers(head.logs)
 			})))
 		}),
 		client.watchBlocks().pipe(Stream.runForEach((head) => Effect.sync(() => {

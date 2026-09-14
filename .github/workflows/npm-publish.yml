@@ -18,8 +18,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.3
       - id: version
-        run: node --input-type=module -e 'import { readFileSync, appendFileSync } from "node:fs"; import { releaseVersion } from "./scripts/release.mjs"; const version = releaseVersion(JSON.parse(readFileSync("package.json")), JSON.parse(readFileSync("package-lock.json"))); appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);'
+        run: bun -e 'import { appendFileSync } from "node:fs"; import { releaseVersion } from "./scripts/release.mjs"; import pkg from "./package.json"; appendFileSync(process.env.GITHUB_OUTPUT, `version=${releaseVersion(pkg)}\n`);'
 
   check:
     uses: ./.github/workflows/ci.yml
@@ -42,12 +45,15 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: npm install --global npm@11.11.1
-      - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: npm run test:package
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.3
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run build
+      - run: bun run test:package
       - name: Validate version and publish package
-        run: node scripts/publish.mjs
+        run: bun scripts/publish.mjs
       - name: Create GitHub Release and publish GitHub package
-        run: node scripts/publish-github.mjs
+        run: bun scripts/publish-github.mjs
         env:
           GH_TOKEN: ${{ github.token }}
