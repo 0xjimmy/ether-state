@@ -33,7 +33,9 @@ unused code checks, control-flow checks, and isolated declarations. Dependency
 checking stays enabled. The CommonJS build uses TypeScript's legacy Node resolver
 only for emission. Package-consumer tests use the modern Node16 resolver.
 
-See [the release flow](docs/releases.md) for the `main` to `release` process and npm setup.
+See [the release flow](docs/releases.md) for the `main` to `release` process.
+A release merge publishes to npm, creates a GitHub Release named `v<version>`,
+and publishes `@0xjimmy/ether-state` to GitHub Packages.
 
 ## TODO
 - [ ] Start using Multicall3
