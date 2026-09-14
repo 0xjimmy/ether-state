@@ -1,4 +1,4 @@
-import { Result, Log, BytesLike, Interface, EventFilter } from 'ethers'
+import type { Result, Log, BytesLike, Interface, EventFilter } from 'ethers'
 
 export enum TriggerType {
 	BLOCK,

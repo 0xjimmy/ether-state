@@ -1,4 +1,4 @@
-import { InterfaceAbi } from 'ethers'
+import type { InterfaceAbi } from 'ethers'
 
 export const MulticallABI: InterfaceAbi = [
 	'function aggregate(tuple(address target, bytes callData)[] calls) returns (uint256 blockNumber, bytes[] returnData)',

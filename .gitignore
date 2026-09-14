@@ -2,7 +2,11 @@
 .nyc_output
 dist
 node_modules
-test
 src/**.js
 coverage
 *.log
+
+.tmp/
+test-results/
+playwright-report/
+*.tgz

@@ -1,7 +1,10 @@
-import { Log } from 'ethers'
-import { Provider, Contract, BytesLike } from 'ethers'
-import { MulticallABI } from './abi'
-import { Action, BlockAction, EventAction, TimeAction, TriggerType } from './types'
+import type { Log } from 'ethers'
+import { Contract } from 'ethers'
+import type { Provider } from 'ethers'
+import { readMulticall } from './multicall.js'
+import { MulticallABI } from './abi.js'
+import type { Action, BlockAction, EventAction, TimeAction } from './types.js'
+import { TriggerType } from './types.js'
 
 const MULTICALL2_ADDRESS = '0x5ba1e12693dc8f9c48aad8770482f4739beed696'
 
@@ -13,7 +16,6 @@ export class EtherState {
 
 	private blockCallback: ((newBlock: number) => Promise<void>) | undefined
 	private timeActions: { intervalsIds: ReturnType<typeof setInterval>[], callbacks: (() => Promise<void>)[] } | undefined
-	// private events: { intervalsIds: ReturnType<typeof setInterval>[], callbacks: (() => Promise<void>)[] } | undefined
 
 	constructor(
 		actions: Action[],
@@ -31,9 +33,9 @@ export class EtherState {
 		);
 		this.blockNumber = 0n
 
-		const blockActions = actions.filter(({ trigger }) => trigger.type === TriggerType.BLOCK) as BlockAction[]
-		const timeActions = actions.filter(({ trigger }) => trigger.type === TriggerType.TIME) as TimeAction[]
-		const eventActions = actions.filter(({ trigger }) => trigger.type === TriggerType.EVENT) as EventAction[]
+		const blockActions = actions.filter((action): action is BlockAction => action.trigger.type === TriggerType.BLOCK)
+		const timeActions = actions.filter((action): action is TimeAction => action.trigger.type === TriggerType.TIME)
+		const eventActions = actions.filter((action): action is EventAction => action.trigger.type === TriggerType.EVENT)
 
 		this.blockCallback = this.setupBlockActions(blockActions)
 		this.timeActions = this.setupTimeActions(timeActions)
@@ -41,8 +43,8 @@ export class EtherState {
 
 		// Populate if option selected
 		if (options && 'populateTimeAndBlock' in options && options.populateTimeAndBlock) {
-			this.update(TriggerType.BLOCK)
-			this.update(TriggerType.TIME)
+			void this.update(TriggerType.BLOCK)
+			void this.update(TriggerType.TIME)
 		}
 	}
 
@@ -59,19 +61,17 @@ export class EtherState {
 						action.input(blockNumber)
 					),
 				}))
-				const [multicallBlock, _, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
-					false,
-					contractCalls
-				)
+				const { blockNumber: multicallBlock, results } = await readMulticall(this.multicall, contractCalls)
 				// Don't update with old data
 				if (multicallBlock >= this.blockNumber) {
 					results.forEach(({ success, returnData }, index) => {
-						if (success) actions[index].output(actions[index].call.interface.decodeFunctionResult(actions[index].call.selector, returnData), multicallBlock)
+						const action = actions[index]
+						if (success && action !== undefined) action.output(action.call.interface.decodeFunctionResult(action.call.selector, returnData), multicallBlock)
 					})
 				}
 			}
 		}
-		this.provider.on('block', callback)
+		void this.provider.on('block', (newBlock: number) => { void callback(newBlock) })
 		return callback
 	}
 
@@ -89,16 +89,14 @@ export class EtherState {
 						action.input(Date.now())
 					),
 				}))
-				const [multicallBlock, _, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
-					false,
-					contractCalls
-				)
+				const { blockNumber: multicallBlock, results } = await readMulticall(this.multicall, contractCalls)
 				results.forEach(({ success, returnData }, index) => {
-					if (success) actions[index].output(actions[index].call.interface.decodeFunctionResult(actions[index].call.selector, returnData), multicallBlock)
+					const action = timeActions[index]
+					if (success && action !== undefined) action.output(action.call.interface.decodeFunctionResult(action.call.selector, returnData), multicallBlock)
 				})
 			}
 			callbacks.push(callback)
-			return setInterval(callback, interval)
+			return setInterval(() => { void callback() }, interval)
 		})
 		return { intervalsIds, callbacks }
 	}
@@ -108,8 +106,10 @@ export class EtherState {
 		const uniqueStringifiedEvents = [...new Set(actions.map(({ trigger }) => JSON.stringify(trigger.eventFilter)))]
 		uniqueStringifiedEvents.forEach((stringifiedEvent) => {
 			const matchingActions = actions.filter(({ trigger }) => JSON.stringify(trigger.eventFilter) === stringifiedEvent)
-			const eventFilter = matchingActions[0].trigger.eventFilter
-			this.provider.on(eventFilter, async (log: Log) => {
+			const firstAction = matchingActions[0]
+			if (firstAction === undefined) return
+			const eventFilter = firstAction.trigger.eventFilter
+			const callback = async (log: Log) => {
 				const contractCalls = matchingActions.map((action) => ({
 					target: action.call.target(),
 					callData: action.call.interface.encodeFunctionData(
@@ -117,29 +117,28 @@ export class EtherState {
 						action.input(log, BigInt(log.blockNumber))
 					)
 				}))
-				const [multicallBlock, _, results]: [bigint, BytesLike, { success: boolean, returnData: BytesLike }[]] = await this.multicall.tryBlockAndAggregate.staticCall(
-					false,
-					contractCalls
-				)
+				const { blockNumber: multicallBlock, results } = await readMulticall(this.multicall, contractCalls)
 				results.forEach(({ success, returnData }, index) => {
-					if (success) matchingActions[index].output(matchingActions[index].call.interface.decodeFunctionResult(matchingActions[index].call.selector, returnData), multicallBlock, log)
+					const action = matchingActions[index]
+					if (success && action !== undefined) action.output(action.call.interface.decodeFunctionResult(action.call.selector, returnData), multicallBlock, log)
 				})
-			})
+			}
+			void this.provider.on(eventFilter, (log: Log) => { void callback(log) })
 		})
 	}
 
 	// Manual update for any TIME or BLOCK actions states
-	async update(type: TriggerType.TIME | TriggerType.BLOCK) {
+	async update(type: TriggerType.TIME | TriggerType.BLOCK): Promise<void> {
 		if (type === TriggerType.BLOCK && this.blockCallback) {
 			const block = await this.provider.getBlockNumber()
-			this.blockCallback(block)
+			await this.blockCallback(block)
 		}
-		if (type === TriggerType.TIME && this.timeActions) this.timeActions.callbacks.forEach(cb => cb())
+		if (type === TriggerType.TIME && this.timeActions) await Promise.all(this.timeActions.callbacks.map(cb => cb()))
 	}
 
 	// Remove all event listners
-	public destroy() {
-		this.provider.removeAllListeners()
-		if (this.timeActions) this.timeActions.intervalsIds.forEach((id) => clearInterval(id))
+	public destroy(): void {
+		void this.provider.removeAllListeners()
+		if (this.timeActions) this.timeActions.intervalsIds.forEach((id) => { clearInterval(id); })
 	}
 }
