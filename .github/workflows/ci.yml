@@ -69,3 +69,11 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           node -e 'const jobs = JSON.parse(process.env.RESULTS); if (!Object.values(jobs).every(job => job.result === "success")) process.exit(1)'
+      - name: Require main as the release PR source
+        if: github.event_name == 'pull_request' && github.base_ref == 'release'
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          test "$HEAD_BRANCH" = main
+          test "$HEAD_REPOSITORY" = 0xjimmy/ether-state

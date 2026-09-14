@@ -16,7 +16,7 @@ Use PRs for changes to both branches. Do not push directly to `release`.
 
 A feature PR or a push to `main` cannot start the publish workflow.
 A version that is already on npm is a successful no-op.
-Prerelease versions and mismatched lockfile versions fail the publish job.
+Prerelease versions, version downgrades, and mismatched lockfile versions fail the publish job.
 If publishing fails before npm accepts the package, fix the cause and rerun the job.
 Do not change a published version. Use a new version for a package fix.
 A GitHub release or tag does not start npm publishing in this flow.
@@ -26,6 +26,9 @@ A GitHub release or tag does not start npm publishing in this flow.
 - Make `main` the GitHub default branch. Keep `master` until old links and work are checked.
 - Create `release` from the same starting commit as `main`.
 - Protect `main` and `release`: require a PR and the `Verify` status check, and block force pushes and deletion.
+  Require up-to-date branches on `main`. Leave that option off on `release`: the
+  PR tests run against the proposed merge, and release merge commits must not
+  force a reverse merge into `main`. Release PRs must come from this repository's `main`.
 - Create the GitHub environment `npm`. Allow deployments only from `release`.
   Add `0xjimmy` as a required reviewer. Permit self-review for the single-maintainer workflow.
 - In the npm settings for `ether-state`, add a GitHub Actions trusted publisher:
@@ -58,3 +61,11 @@ publisher, and publishing through 2FA or a granular token with bypass enabled.
 The old lockfile had two high-severity dependency findings. Updating ethers to
 6.17.0 removed them. ethers pins an old Node type package. This package declares
 the current Node 22 types so consumers can check declarations with `skipLibCheck: false`.
+
+## Setup status
+
+`main` is the default branch. Both `main` and `release` exist and require PRs
+with the `Verify` check. The `npm` environment requires approval by `0xjimmy`
+and permits only the `release` branch. These settings are active on GitHub.
+The npm trusted publisher is prepared in the browser but is not saved.
+The first release has not been merged or published.
