@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3
+
+- Create a GitHub Release named and tagged with the package version after npm publishing.
+- Publish the same compiled files as `@0xjimmy/ether-state` in GitHub Packages.
+- Use the merged release PR as the approval for the full publishing workflow.
+- Preserve the published source commit and skip completed work on reruns.
+
 ## 0.2.2
 
 - Add ESM output and keep CommonJS output with matching type declarations.

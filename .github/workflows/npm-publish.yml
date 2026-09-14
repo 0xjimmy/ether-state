@@ -12,16 +12,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - id: version
+        run: node --input-type=module -e 'import { readFileSync, appendFileSync } from "node:fs"; import { releaseVersion } from "./scripts/release.mjs"; const version = releaseVersion(JSON.parse(readFileSync("package.json")), JSON.parse(readFileSync("package-lock.json"))); appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);'
+
   check:
     uses: ./.github/workflows/ci.yml
 
   publish:
-    needs: check
+    name: Release v${{ needs.version.outputs.version }}
+    needs: [check, version]
     runs-on: ubuntu-latest
-    environment: npm
+    environment:
+      name: npm
+      url: https://github.com/0xjimmy/ether-state/releases/tag/v${{ needs.version.outputs.version }}
     permissions:
-      contents: read
+      contents: write
       id-token: write
+      packages: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -34,3 +47,7 @@ jobs:
       - run: npm run test:package
       - name: Validate version and publish package
         run: node scripts/publish.mjs
+      - name: Create GitHub Release and publish GitHub package
+        run: node scripts/publish-github.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
