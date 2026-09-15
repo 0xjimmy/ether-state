@@ -31,6 +31,13 @@ export interface EvmClientConfig {
 		readonly requestTimeout?: number
 		readonly batchWindow?: number
 		readonly batchSize?: number
+		readonly httpBatchWindow?: number
+		readonly httpBatchMaxItems?: number
+		readonly httpBatchMaxBytes?: number
+		readonly multicallWindow?: number
+		readonly multicallMaxCalls?: number
+		readonly multicallMaxCalldataBytes?: number
+		readonly hedgeDelay?: number
 		readonly maxQueuedRequests?: number
 		readonly maxRequestsPerSecond?: number
 		readonly maxConcurrentRequests?: number
@@ -142,8 +149,13 @@ interface ClientOptions {
 	readonly observationLimit: number
 	readonly queryCacheSize: number
 	readonly requestTimeout: number
-	readonly batchWindow: number
-	readonly batchSize: number
+	readonly httpBatchWindow: number
+	readonly httpBatchMaxItems: number
+	readonly httpBatchMaxBytes: number
+	readonly multicallWindow: number
+	readonly multicallMaxCalls: number
+	readonly multicallMaxCalldataBytes: number
+	readonly hedgeDelay: number
 	readonly maxQueuedRequests: number
 	readonly maxRequestsPerSecond: number
 	readonly maxConcurrentRequests: number
@@ -190,8 +202,13 @@ const defaultOptions: ClientOptions = {
 	observationLimit: 15,
 	queryCacheSize: 128,
 	requestTimeout: 8_000,
-	batchWindow: 100,
-	batchSize: 20,
+	httpBatchWindow: 0,
+	httpBatchMaxItems: 20,
+	httpBatchMaxBytes: 256_000,
+	multicallWindow: 0,
+	multicallMaxCalls: 20,
+	multicallMaxCalldataBytes: 1_024,
+	hedgeDelay: 100,
 	maxQueuedRequests: 1_024,
 	maxRequestsPerSecond: 20,
 	maxConcurrentRequests: 20,
@@ -204,14 +221,24 @@ const resolveOptions = (options: EvmClientConfig["options"]): ClientOptions => (
 	observationLimit: options?.observationLimit ?? defaultOptions.observationLimit,
 	queryCacheSize: options?.queryCacheSize ?? defaultOptions.queryCacheSize,
 	requestTimeout: options?.requestTimeout ?? defaultOptions.requestTimeout,
-	batchWindow: options?.batchWindow ?? defaultOptions.batchWindow,
-	batchSize: options?.batchSize ?? defaultOptions.batchSize,
+	httpBatchWindow: options?.httpBatchWindow ?? options?.batchWindow ?? defaultOptions.httpBatchWindow,
+	httpBatchMaxItems: options?.httpBatchMaxItems ?? options?.batchSize ?? defaultOptions.httpBatchMaxItems,
+	httpBatchMaxBytes: options?.httpBatchMaxBytes ?? defaultOptions.httpBatchMaxBytes,
+	multicallWindow: options?.multicallWindow ?? options?.batchWindow ?? defaultOptions.multicallWindow,
+	multicallMaxCalls: options?.multicallMaxCalls ?? options?.batchSize ?? defaultOptions.multicallMaxCalls,
+	multicallMaxCalldataBytes: options?.multicallMaxCalldataBytes ?? defaultOptions.multicallMaxCalldataBytes,
+	hedgeDelay: options?.hedgeDelay ?? defaultOptions.hedgeDelay,
 	maxQueuedRequests: options?.maxQueuedRequests ?? defaultOptions.maxQueuedRequests,
 	maxRequestsPerSecond: options?.maxRequestsPerSecond ?? defaultOptions.maxRequestsPerSecond,
 	maxConcurrentRequests: options?.maxConcurrentRequests ?? defaultOptions.maxConcurrentRequests,
 })
 
 const hashPattern = /^0x[0-9a-fA-F]{64}$/
+
+const isBlockHashReference = (value: unknown): boolean =>
+	(typeof value === "string" && hashPattern.test(value)) ||
+	(value !== null && typeof value === "object" && "blockHash" in value &&
+		typeof value.blockHash === "string" && hashPattern.test(value.blockHash))
 
 const keepCompletedResult = <Method extends HedgeableRpcMethodName>(request: {
 	readonly method: Method
@@ -220,6 +247,7 @@ const keepCompletedResult = <Method extends HedgeableRpcMethodName>(request: {
 	if (result === null) return false
 	if (request.method === "eth_chainId" || request.method === "net_version") return true
 	if (request.method === "eth_getBlockByHash") return true
+	if (request.method === "eth_getLogs") return isBlockHashReference(request.params[0])
 	const blockPinned = request.method === "eth_call" || request.method === "eth_getBalance" ||
 		request.method === "eth_getCode" || request.method === "eth_getProof" ||
 		request.method === "eth_getStorageAt" || request.method === "eth_getStorageValues" ||
@@ -228,7 +256,7 @@ const keepCompletedResult = <Method extends HedgeableRpcMethodName>(request: {
 	const blockIndex = request.method === "eth_getBlockReceipts" ? 0
 		: request.method === "eth_getStorageAt" || request.method === "eth_getProof" ? 2 : 1
 	const block = request.params[blockIndex]
-	return typeof block === "string" && hashPattern.test(block)
+	return isBlockHashReference(block)
 }
 
 const errorText = <Error>(cause: Cause.Cause<Error>): string => Cause.pretty(cause)
@@ -491,7 +519,8 @@ export class EvmClient {
 		private readonly live: LiveBlocks,
 	) {
 		this.scheduler = new RequestScheduler({ rps: options.maxRequestsPerSecond, concurrency: options.maxConcurrentRequests, capacity: options.maxQueuedRequests })
-		this.reads = new MulticallReads({ scope: wsScope, window: options.batchWindow, size: options.batchSize, capacity: options.maxQueuedRequests,
+		this.reads = new MulticallReads({ scope: wsScope, window: options.multicallWindow, size: options.multicallMaxCalls,
+			maxCalldataBytes: options.multicallMaxCalldataBytes, capacity: options.maxQueuedRequests,
 			fetch: (transaction, block) => this.fetch({ method: "eth_call", params: [transaction, block] }),
 			code: (block) => this.fetch({ method: "eth_getCode", params: [multicallAddress, block] }) })
 		this.blocks = SubscriptionRef.changes(head).pipe(
@@ -512,7 +541,8 @@ export class EvmClient {
 			const options = resolveOptions(config.options)
 			for (const [option, value] of Object.entries({ ...options, blockTime: config.network.blockTime })) {
 				if (value === undefined) continue
-				const minimum = option === "concurrentHttp" || option === "concurrentWs" || option === "queryCacheSize" || option === "batchWindow" ? 0 : 1
+				const minimum = option === "concurrentHttp" || option === "concurrentWs" || option === "queryCacheSize" ||
+					option === "batchWindow" || option === "httpBatchWindow" || option === "multicallWindow" || option === "hedgeDelay" ? 0 : 1
 				if (!Number.isSafeInteger(value) || value < minimum) {
 					return yield* Effect.fail<InvalidClientConfig>({ _tag: "InvalidClientConfig", option })
 				}
@@ -639,7 +669,7 @@ export class EvmClient {
 		return this.queries.stats
 	}
 
-	get metrics(): { readonly multicall: { readonly batches: number; readonly calls: number }; readonly http: readonly { readonly endpoint: string; readonly envelopes: number; readonly requests: number; readonly batches: number; readonly maxRps: number }[] } {
+	get metrics(): { readonly multicall: { readonly batches: number; readonly calls: number; readonly singles: number; readonly fallbacks: number }; readonly http: readonly { readonly endpoint: string; readonly envelopes: number; readonly requests: number; readonly batches: number; readonly singles: number; readonly fallbacks: number; readonly resends: number; readonly maxRps: number }[] } {
 		return { multicall: { ...this.reads.stats }, http: [...this.httpBatches].map(([endpoint, batch]) => ({ endpoint, ...batch.stats, maxRps: this.scheduler.limit(endpoint) })) }
 	}
 
@@ -650,16 +680,21 @@ export class EvmClient {
 			if (reference === "pending") return yield* this.fetch({ method: "eth_call", params: [read.transaction, reference] })
 			let number = head.number
 			let hash = head.hash
-			if (reference !== head.number) {
+			const numberReference = typeof reference === "bigint" ? reference
+				: typeof reference === "object" && "blockNumber" in reference ? reference.blockNumber
+					: typeof reference === "string" && /^0x[\da-f]+$/i.test(reference) && !hashPattern.test(reference) ? BigInt(reference) : undefined
+			if (numberReference !== undefined) {
+				number = numberReference
+				if (number !== head.number) hash = null
+			} else if (reference !== "latest") {
 				const hashReference = typeof reference === "object" && "blockHash" in reference ? reference.blockHash
 					: typeof reference === "string" && hashPattern.test(reference) ? reference : undefined
-				const numberReference = typeof reference === "bigint" ? reference : typeof reference === "object"
-					? "blockNumber" in reference ? reference.blockNumber : head.number
-					: hashReference !== undefined ? head.number : /^0x[\da-f]+$/i.test(reference) ? BigInt(reference)
-						: yield* Schema.decodeUnknownEffect(Schema.Literals(["earliest", "finalized", "safe", "latest", "pending"]))(reference)
+				const tag = hashReference === undefined
+					? yield* Schema.decodeUnknownEffect(Schema.Literals(["earliest", "finalized", "safe"]))(reference)
+					: undefined
 				const block = yield* hashReference !== undefined
-					? this.fetchOne({ method: "eth_getBlockByHash", params: [hashReference, false] })
-					: this.fetchOne({ method: "eth_getBlockByNumber", params: [numberReference, false] })
+					? this.fetch({ method: "eth_getBlockByHash", params: [hashReference, false] })
+					: this.fetch({ method: "eth_getBlockByNumber", params: [tag ?? "latest", false] })
 				if (block === null) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
 				number = block.number
 				hash = block.hash
@@ -933,9 +968,12 @@ export class EvmClient {
 				...activeWs.map(({ state }): EndpointSource => ({ endpoint: state.endpoint, transport: "ws" })),
 			]
 			if (sources.length === 0) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
-			const attempts = sources.map((source) => this.requestAt(source, request, true).pipe(
+			const ranked = [...sources].sort((a, b) => this.scheduler.load(a.endpoint) - this.scheduler.load(b.endpoint))
+			const attempts = ranked.map((source, index) => this.requestAt(source, request, true).pipe(
 				Effect.flatMap((result) => accept(result) ? Effect.succeed({ ...source, result })
 					: Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })),
+				index === 0 || this.options.hedgeDelay === 0 ? (effect) => effect
+					: (effect) => Effect.sleep(this.options.hedgeDelay * index).pipe(Effect.andThen(effect)),
 			))
 			const winner = yield* Effect.raceAll(attempts)
 			yield* this.observeResult(request.method, winner.result, winner)
@@ -1011,7 +1049,8 @@ export class EvmClient {
 		const existing = this.httpBatches.get(endpoint)
 		if (existing !== undefined) return existing
 		const batch = new HttpBatcher({ endpoint, client: this.httpClient, scope: this.wsScope,
-			window: this.options.batchWindow, size: this.options.batchSize, capacity: this.options.maxQueuedRequests, timeout: this.options.requestTimeout })
+			window: this.options.httpBatchWindow, size: this.options.httpBatchMaxItems, maxBytes: this.options.httpBatchMaxBytes,
+			capacity: this.options.maxQueuedRequests, timeout: this.options.requestTimeout })
 		this.httpBatches.set(endpoint, batch)
 		return batch
 	}

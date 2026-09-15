@@ -45,6 +45,7 @@ export const ethHttpRpc = <Method extends HttpRpcMethodName>(
 ): Effect.Effect<RpcResult<Method>, RpcHttpError, HttpClient.HttpClient> => execute(options, getRpcMethod(options.method))
 
 interface WireRequest { readonly jsonrpc: "2.0"; readonly id: number; readonly method: string; readonly params: unknown }
+const wireBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).byteLength
 const Response = Schema.StructWithRest(Schema.Struct({ id: Schema.Union([Schema.Number, Schema.String, Schema.Null]) }),
 	[Schema.Record(Schema.String, Schema.Unknown)])
 const Responses = Schema.Array(Response)
@@ -54,14 +55,15 @@ export class HttpBatcher {
 	private unsupportedUntil = 0
 	private limit: number
 	private readonly queue: BatchQueue<WireRequest, unknown, RpcHttpError>
-	readonly stats = { envelopes: 0, requests: 0, batches: 0 }
+	readonly stats = { envelopes: 0, requests: 0, batches: 0, singles: 0, fallbacks: 0, resends: 0 }
 
 	constructor(private readonly options: {
 		readonly endpoint: string; readonly client: HttpClient.HttpClient; readonly scope: Scope.Scope
-		readonly window: number; readonly size: number; readonly capacity: number; readonly timeout: number
+		readonly window: number; readonly size: number; readonly maxBytes: number; readonly capacity: number; readonly timeout: number
 	}) {
 		this.limit = options.size
-		this.queue = new BatchQueue({ ...options, run: (requests) => this.send(requests) })
+		this.queue = new BatchQueue<WireRequest, unknown, RpcHttpError>({ ...options, maxWeight: options.maxBytes,
+			weight: wireBytes, run: (requests) => this.send(requests) })
 	}
 
 	request(request: Omit<WireRequest, "id">): Effect.Effect<unknown, RpcHttpError | QueueFull> {
@@ -76,9 +78,10 @@ export class HttpBatcher {
 	private execute(body: WireRequest | readonly WireRequest[]): Effect.Effect<unknown, RpcHttpError> {
 		return HttpClientRequest.post(this.options.endpoint).pipe(HttpClientRequest.bodyJson(body),
 			Effect.tap(() => Effect.sync(() => {
-				this.stats.envelopes++
-				this.stats.requests += Array.isArray(body) ? body.length : 1
-				if (Array.isArray(body)) this.stats.batches++
+					this.stats.envelopes++
+					this.stats.requests += Array.isArray(body) ? body.length : 1
+					if (Array.isArray(body)) this.stats.batches++
+					else this.stats.singles++
 			})), Effect.flatMap(this.options.client.execute), Effect.flatMap(HttpClientResponse.filterStatusOk),
 			Effect.flatMap((response) => response.json), Effect.timeoutOrElse({ duration: this.options.timeout,
 				orElse: () => Effect.fail<RpcError>({ _tag: "RpcError", code: -32000, message: "RPC batch timed out" }) }))
@@ -87,6 +90,7 @@ export class HttpBatcher {
 	private send(requests: readonly WireRequest[]): Effect.Effect<readonly Exit.Exit<unknown, RpcHttpError>[], RpcHttpError> {
 		if (requests.length === 0) return Effect.succeed([])
 		if (Date.now() < this.unsupportedUntil || requests.length === 1) {
+			if (requests.length > 1) this.stats.fallbacks++
 			return Effect.forEach(requests, (request) => Effect.exit(this.execute(request)), { concurrency: 4 })
 		}
 		if (requests.length > this.limit) {
@@ -102,13 +106,23 @@ export class HttpBatcher {
 				}
 				return Effect.fail<RpcError>({ _tag: "RpcError", code: -32603, message: "Invalid RPC batch response" })
 			}
-			return Schema.decodeUnknownEffect(Responses)(value).pipe(Effect.flatMap((responses) => Effect.forEach(requests, (request) => {
-				const matches = responses.filter((response) => response.id === request.id)
-				return matches.length === 1 ? Effect.succeed(Exit.succeed(matches[0])) : Effect.exit(this.execute(request))
-			}, { concurrency: 4 })))
+			return Schema.decodeUnknownEffect(Responses)(value).pipe(Effect.flatMap((responses) => {
+				const byId = new Map<number, unknown[]>()
+				for (const response of responses) {
+					if (typeof response.id !== "number") continue
+					byId.set(response.id, [...(byId.get(response.id) ?? []), response])
+				}
+				return Effect.forEach(requests, (request) => {
+					const matches = byId.get(request.id) ?? []
+					if (matches.length === 1) return Effect.succeed(Exit.succeed(matches[0]))
+					this.stats.resends++
+					return Effect.exit(this.execute(request))
+				}, { concurrency: 4 })
+			}))
 		}), Effect.catch((error) => {
 			if (error._tag === "HttpClientError" && error.response?.status === 413 && requests.length > 1) {
 				this.limit = Math.max(1, Math.floor(requests.length / 2))
+				this.stats.fallbacks++
 				return this.send(requests)
 			}
 			return Effect.fail(error)

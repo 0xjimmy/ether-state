@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
 import type { EvmClient, EvmClientError, HedgeableRpcMethodName } from "./rpc/client.js"
-import { getRpcMethod, RpcMethods, type RpcBlock, type RpcFilter, type RpcLog } from "./rpc/schema.js"
+import type { CallError } from "./rpc/multicall.js"
+import { getRpcMethod, RpcMethods, type RpcBlock, type RpcFilter, type RpcLog, type RpcLogFilter } from "./rpc/schema.js"
 
 export class ViemAdapterError extends Error {
 	readonly code: number
@@ -71,12 +72,33 @@ const isHedgeableMethod = (method: string): method is HedgeableRpcMethodName => 
 const adapterError = (error: unknown): ViemAdapterError => {
 	if (error !== null && typeof error === "object") {
 		const code = "code" in error && typeof error.code === "number" ? error.code
+			: "_tag" in error && error._tag === "ContractReverted" ? 3
 			: "_tag" in error && error._tag === "SchemaError" ? -32602 : -32603
-		const message = "message" in error && typeof error.message === "string" ? error.message : "EvmClient request failed"
+		const message = "message" in error && typeof error.message === "string" ? error.message
+			: "_tag" in error && error._tag === "ContractReverted" ? "Contract execution reverted" : "EvmClient request failed"
 		const data = "data" in error ? error.data : undefined
 		return new ViemAdapterError(message, { code, data, cause: error })
 	}
 	return new ViemAdapterError(String(error), { code: -32603, cause: error })
+}
+
+const requestCall = (
+	client: EvmClient,
+	params: unknown,
+): Effect.Effect<unknown, CallError | Schema.SchemaError> => {
+	const definition = getRpcMethod("eth_call")
+	return Schema.decodeUnknownEffect(definition.request)({
+		jsonrpc: "2.0",
+		id: 1,
+		method: "eth_call",
+		params: params ?? [],
+	}).pipe(
+		Effect.flatMap((decoded) => client.call({
+			transaction: decoded.params[0],
+			...(decoded.params[1] === undefined ? {} : { block: decoded.params[1] }),
+		})),
+		Effect.flatMap(Schema.encodeEffect(definition.result)),
+	)
 }
 
 const runEffect = async <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> => {
@@ -134,6 +156,7 @@ function request(client: EvmClient, input: ViemRequest, options?: unknown): Prom
 	const signal = options !== null && typeof options === "object" && "signal" in options && options.signal instanceof AbortSignal
 		? options.signal : undefined
 	if (input.method === "eth_sendRawTransaction") return runEffect(requestRawTransaction(client, input.params), signal)
+	if (input.method === "eth_call") return runEffect(requestCall(client, input.params), signal)
 	return runEffect(requestPublic(client, input.method, input.params), signal)
 }
 
@@ -144,6 +167,27 @@ const encodeLog = (log: RpcLog): Effect.Effect<unknown, Schema.SchemaError> =>
 	Schema.encodeEffect(getRpcMethod("eth_getLogs").result)([log]).pipe(
 		Effect.map((logs) => logs[0]),
 	)
+
+function* blockRange(start: bigint, end: bigint): Generator<bigint> {
+	for (let number = start; number <= end; number++) yield number
+}
+
+const catchUpBlocks = (client: EvmClient): Stream.Stream<RpcBlock, EvmClientError | ViemAdapterError> => Stream.suspend(() => {
+	let previous: bigint | undefined
+	return client.blocks.pipe(
+		Stream.map((head) => {
+			const start = previous === undefined ? head.number : previous + 1n
+			previous = head.number > (previous ?? -1n) ? head.number : previous
+			return blockRange(start, head.number)
+		}),
+		Stream.flattenIterable,
+		Stream.mapEffect((number) => client.fetch({ method: "eth_getBlockByNumber", params: [number, false] }).pipe(
+			Effect.flatMap((block) => block === null
+				? Effect.fail(new ViemAdapterError(`Block ${String(number)} is unavailable`, { code: -32001 }))
+				: Effect.succeed(block)),
+		)),
+	)
+})
 
 const subscriptionStream = (
 	client: EvmClient,
@@ -157,13 +201,17 @@ const subscriptionStream = (
 		params,
 	}).pipe(Effect.map((decoded) => {
 		if (decoded.params[0] === "newHeads") {
-			return client.watchBlocks({ full: true }).pipe(Stream.mapEffect((head) => encodeBlock(head.block)))
+			return catchUpBlocks(client).pipe(Stream.mapEffect(encodeBlock))
 		}
 		if (decoded.params[0] === "logs") {
 			const filter = decoded.params[1]
-			return isRpcFilter(filter)
-				? client.watchLogs(filter).pipe(Stream.mapEffect(encodeLog))
-				: Stream.fail(unsupported("eth_subscribe:logs"))
+			if (!isRpcFilter(filter)) return Stream.fail(unsupported("eth_subscribe:logs"))
+			const liveFilter: RpcLogFilter = { ...(filter.address === undefined ? {} : { address: filter.address }),
+				...(filter.topics === undefined ? {} : { topics: filter.topics }) }
+			return catchUpBlocks(client).pipe(Stream.flatMap((block) => client.fetch({
+				method: "eth_getLogs",
+				params: [{ ...liveFilter, blockHash: block.hash }],
+			}).pipe(Stream.fromEffect, Stream.flattenIterable, Stream.mapEffect(encodeLog))))
 		}
 		return Stream.fail(unsupported(`eth_subscribe:${decoded.params[0]}`))
 	}))

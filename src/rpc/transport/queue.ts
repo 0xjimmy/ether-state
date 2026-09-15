@@ -11,11 +11,14 @@ interface Pending<A, B, E> {
 export class BatchQueue<A, B, E> {
 	private readonly pending = new Set<Pending<A, B, E>>()
 	private running = false
+	private wake: Deferred.Deferred<undefined> | undefined
 
 	constructor(private readonly options: {
 		readonly scope: Scope.Scope
 		readonly window: number
 		readonly size: number
+		readonly maxWeight?: number
+		readonly weight?: (input: A) => number
 		readonly capacity: number
 		readonly run: (inputs: readonly A[]) => Effect.Effect<readonly Exit.Exit<B, E>[], E>
 	}) {}
@@ -31,15 +34,42 @@ export class BatchQueue<A, B, E> {
 				this.running = true
 				yield* Effect.forkIn(this.drain(), this.options.scope)
 			}
+			if (this.wake !== undefined && this.isFull()) yield* Deferred.succeed(this.wake, undefined)
 			return yield* restore(Deferred.await(entry.result)).pipe(Effect.ensuring(Effect.sync(() => { this.pending.delete(entry) })))
 		}))
+	}
+
+	private weight(entries: readonly Pending<A, B, E>[]): number {
+		const weight = this.options.weight
+		return weight === undefined ? entries.length
+			: entries.reduce((total, entry) => total + Math.max(0, weight(entry.input)), 0)
+	}
+
+	private isFull(): boolean {
+		const entries = [...this.pending]
+		return entries.length >= this.options.size ||
+			(this.options.maxWeight !== undefined && this.weight(entries) >= this.options.maxWeight)
+	}
+
+	private take(): readonly Pending<A, B, E>[] {
+		const selected: Pending<A, B, E>[] = []
+		for (const entry of this.pending) {
+			if (selected.length >= this.options.size) break
+			const next = [...selected, entry]
+			if (selected.length > 0 && this.options.maxWeight !== undefined && this.weight(next) > this.options.maxWeight) break
+			selected.push(entry)
+		}
+		return selected
 	}
 
 	private drain(): Effect.Effect<void> {
 		return Effect.gen({ self: this }, function* () {
 			while (this.pending.size > 0) {
-				yield* Effect.sleep(this.options.window)
-				const entries = [...this.pending].slice(0, this.options.size)
+				const wake = yield* Deferred.make<undefined>()
+				this.wake = wake
+				if (!this.isFull()) yield* Effect.race(Effect.sleep(this.options.window), Deferred.await(wake))
+				if (this.wake === wake) this.wake = undefined
+				const entries = this.take()
 				if (entries.length === 0) continue
 				yield* this.options.run(entries.map((entry) => entry.input)).pipe(Effect.onExit((exit) =>
 					Effect.forEach(entries, (entry, index) => {
@@ -49,6 +79,7 @@ export class BatchQueue<A, B, E> {
 					}, { discard: true })), Effect.ignore)
 			}
 		}).pipe(Effect.onExit((exit) => Effect.gen({ self: this }, function* () {
+			this.wake = undefined
 			this.running = false
 			if (Exit.isFailure(exit)) {
 				const entries = [...this.pending]

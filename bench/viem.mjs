@@ -9,15 +9,18 @@ import { viemTransport } from '../src/viem.ts'
 const upstream = process.env.BASE_RPC_HTTP_URL ?? 'https://mainnet.base.org'
 const durationMs = Number(process.env.BENCH_DURATION_MS ?? 60000)
 const concurrency = Number(process.env.BENCH_CONCURRENCY ?? 10)
-const workload = process.env.BENCH_WORKLOAD ?? 'blockNumber'
+const workload = process.env.BENCH_WORKLOAD ?? 'contractReads'
 const target = process.env.BENCH_ADDRESS ?? '0x4200000000000000000000000000000000000006'
+const httpBatchWindow = Number(process.env.BENCH_HTTP_BATCH_WINDOW ?? 0)
+const multicallWindow = Number(process.env.BENCH_MULTICALL_WINDOW ?? 0)
 
-const emptyCounters = () => ({ envelopes: 0, items: 0, requestBytes: 0, responseBytes: 0, failures: 0, active: 0, maxConcurrency: 0 })
-let counters = emptyCounters()
+const emptyCounters = () => ({ envelopes: 0, items: 0, requestBytes: 0, responseBytes: 0, failures: 0, rpcErrors: 0, active: 0, maxConcurrency: 0 })
+const counters = { viem: emptyCounters(), etherState: emptyCounters() }
 const proxy = Bun.serve({
   port: 0,
   async fetch(request) {
-	const stats = counters
+	const key = new URL(request.url).pathname === '/ether-state' ? 'etherState' : 'viem'
+	const stats = counters[key]
     const body = await request.text()
     stats.envelopes++
     stats.requestBytes += Buffer.byteLength(body)
@@ -30,6 +33,8 @@ const proxy = Bun.serve({
       const responseBody = await response.text()
       stats.responseBytes += Buffer.byteLength(responseBody)
       if (!response.ok) stats.failures++
+      const decoded = JSON.parse(responseBody)
+      stats.rpcErrors += (Array.isArray(decoded) ? decoded : [decoded]).filter(value => value?.error !== undefined).length
       return new Response(responseBody, { status: response.status, headers: { 'content-type': 'application/json' } })
     } catch (error) {
       stats.failures++
@@ -42,26 +47,44 @@ const proxy = Bun.serve({
 const proxyUrl = `http://127.0.0.1:${proxy.port}`
 
 const percentile = (values, fraction) => values[Math.min(values.length - 1, Math.floor(values.length * fraction))] ?? 0
-const runArm = async (name, client, blockNumber) => {
+const contractAbi = [
+  { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
+  { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
+  { type: 'function', name: 'totalSupply', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+]
+const distinctAddresses = Array.from({ length: 20 }, (_, index) => `0x${(index + 1).toString(16).padStart(40, '0')}`)
+
+const makeAction = (client, blockNumber) => {
+  if (workload === 'balance') return { logicalReads: 1, run: () => client.getBalance({ address: target, blockNumber }) }
+  if (workload === 'dedupe') return { logicalReads: 20, run: () => Promise.all(Array.from({ length: 20 }, () => client.getBalance({ address: target, blockNumber }))) }
+  if (workload === 'distinct') return { logicalReads: 20, run: () => Promise.all(distinctAddresses.map(address => client.getBalance({ address, blockNumber }))) }
+  if (workload === 'contractReads') return { logicalReads: contractAbi.length, run: () => Promise.all(contractAbi.map(item => client.readContract({
+    address: target, abi: [item], functionName: item.name, blockNumber,
+  }))) }
+  return { logicalReads: 1, run: () => client.getBlockNumber({ cacheTime: 0 }) }
+}
+
+const runArm = async (name, counterKey, client, blockNumber, clientMetrics) => {
   const latencies = []
   let completed = 0
   let failures = 0
-  const action = workload === 'balance'
-    ? () => client.getBalance({ address: target, blockNumber })
-    : workload === 'dedupe'
-      ? () => Promise.all(Array.from({ length: 20 }, () => client.getBalance({ address: target, blockNumber })))
-      : () => client.getBlockNumber({ cacheTime: 0 })
+  const action = makeAction(client, blockNumber)
   const coldStarted = performance.now()
-  await action()
+  let coldFailure
+  try {
+    await action.run()
+  } catch (error) {
+    coldFailure = error instanceof Error ? error.message : String(error)
+  }
   const coldLatencyMs = performance.now() - coldStarted
-  counters = emptyCounters()
+  counters[counterKey] = emptyCounters()
   const started = performance.now()
   const end = started + durationMs
   await Promise.all(Array.from({ length: concurrency }, async () => {
     while (performance.now() < end) {
       const requestStarted = performance.now()
       try {
-        await action()
+        await action.run()
         completed++
       } catch {
         failures++
@@ -72,28 +95,33 @@ const runArm = async (name, client, blockNumber) => {
   const elapsedMs = performance.now() - started
   latencies.sort((left, right) => left - right)
   return {
-    name, workload, coldLatencyMs, durationMs: elapsedMs, concurrency, completed, failures,
-    requestsPerSecond: completed / (elapsedMs / 1000),
+    name, workload, coldLatencyMs, coldFailure, durationMs: elapsedMs, concurrency, completed, failures,
+    actionsPerSecond: completed / (elapsedMs / 1000),
+    logicalReadsPerSecond: completed * action.logicalReads / (elapsedMs / 1000),
     latencyMs: { p50: percentile(latencies, 0.50), p95: percentile(latencies, 0.95), p99: percentile(latencies, 0.99) },
     upstream: {
-      envelopes: counters.envelopes, items: counters.items, requestBytes: counters.requestBytes,
-      responseBytes: counters.responseBytes, failures: counters.failures, retries: 0, maxConcurrency: counters.maxConcurrency,
+      envelopes: counters[counterKey].envelopes, items: counters[counterKey].items, requestBytes: counters[counterKey].requestBytes,
+      responseBytes: counters[counterKey].responseBytes, failures: counters[counterKey].failures, rpcErrors: counters[counterKey].rpcErrors,
+      maxConcurrency: counters[counterKey].maxConcurrency,
     },
+    client: clientMetrics?.(),
   }
 }
 
 try {
   const result = await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-    const evm = yield* EvmClient.make({
-      endpoints: { http: [proxyUrl], ws: [] }, network: { chainId: 8453n, blockTime: 2000 },
-      options: { concurrentHttp: 1, concurrentWs: 0, batchWindow: 5, maxRequestsPerSecond: 1000, maxConcurrentRequests: concurrency },
-    })
-    const direct = createPublicClient({ chain: base, transport: http(proxyUrl, { retryCount: 0 }), cacheTime: 0 })
-    const adapted = createPublicClient({ chain: base, transport: viemTransport(evm), batch: { multicall: false }, cacheTime: 0 })
+    const direct = createPublicClient({ chain: base, transport: http(`${proxyUrl}/viem`, { retryCount: 0 }), cacheTime: 0 })
     const blockNumber = (yield* Effect.promise(() => direct.getBlockNumber())) - 5n
-    const directResult = yield* Effect.promise(() => runArm('viem', direct, blockNumber))
-    const adaptedResult = yield* Effect.promise(() => runArm('ether-state', adapted, blockNumber))
-    return { upstream, blockNumber: blockNumber.toString(), results: [directResult, adaptedResult] }
+    const evm = yield* EvmClient.make({
+      endpoints: { http: [`${proxyUrl}/ether-state`], ws: [] }, network: { chainId: 8453n, blockTime: 2000 },
+      options: { concurrentHttp: 1, concurrentWs: 0, httpBatchWindow, multicallWindow,
+        maxRequestsPerSecond: 1000, maxConcurrentRequests: concurrency },
+    })
+    const adapted = createPublicClient({ chain: base, transport: viemTransport(evm), batch: { multicall: false }, cacheTime: 0 })
+    const adaptedResult = yield* Effect.promise(() => runArm('ether-state', 'etherState', adapted, blockNumber, () => evm.metrics))
+    const directResult = yield* Effect.promise(() => runArm('viem-default', 'viem', direct, blockNumber))
+    return { upstream, blockNumber: blockNumber.toString(), settings: { durationMs, concurrency, workload, httpBatchWindow, multicallWindow },
+      results: [directResult, adaptedResult] }
   })).pipe(Effect.provide(FetchHttpClient.layer), Effect.provide(Socket.layerWebSocketConstructorGlobal)))
   const output = JSON.stringify(result, null, 2)
   if (process.env.BENCH_OUTPUT !== undefined) await Bun.write(process.env.BENCH_OUTPUT, `${output}\n`)
