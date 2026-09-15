@@ -22,21 +22,29 @@ try {
   await writeFile('package.json', manifest)
 }
 const files = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n').map(file => file.replace(/^package\//, ''))
-for (const file of ['dist/esm/index.js', 'dist/esm/index.d.ts', 'dist/cjs/index.cjs', 'LICENSE', 'README.md']) {
+for (const file of ['dist/esm/index.js', 'dist/esm/index.d.ts', 'dist/cjs/index.cjs', 'dist/esm/viem.js', 'dist/esm/viem.d.ts', 'dist/cjs/viem.cjs', 'LICENSE', 'README.md']) {
   assert.ok(files.includes(file), `Missing package file: ${file}`)
 }
 assert.ok(files.every(file => file.startsWith('dist/') || ['package.json', 'README.md', 'LICENSE'].includes(file)), 'Unexpected package file')
 assert.ok(!files.some(file => /\/test\./.test(file)), 'Example must not ship')
 await writeFile(path.join(directory, 'package.json'), '{"private":true,"type":"module"}')
 run(['add', '--ignore-scripts', archive], directory)
+run(['add', '--ignore-scripts', 'viem@2.56.5'], directory)
 await copyFile('test/runtime-smoke.mjs', path.join(directory, 'runtime-smoke.mjs'))
 await writeFile(path.join(directory, 'esm.mjs'), "import * as api from 'ether-state'; import { smoke } from './runtime-smoke.mjs'; await smoke(api);\n")
 await writeFile(path.join(directory, 'cjs.cjs'), "const api = require('ether-state'); import('./runtime-smoke.mjs').then(({ smoke }) => smoke(api)).catch(error => { console.error(error); process.exitCode = 1; });\n")
-for (const file of ['esm.mjs', 'cjs.cjs']) run([file], directory)
+await writeFile(path.join(directory, 'viem-esm.mjs'), "import { viemTransport } from 'ether-state/viem'; if (typeof viemTransport !== 'function') throw new Error('Missing Viem adapter');\n")
+await writeFile(path.join(directory, 'viem-cjs.cjs'), "const { viemTransport } = require('ether-state/viem'); if (typeof viemTransport !== 'function') throw new Error('Missing Viem adapter');\n")
+for (const file of ['esm.mjs', 'cjs.cjs', 'viem-esm.mjs', 'viem-cjs.cjs']) run([file], directory)
 const types = `import { EvmClient, getRpcEndpoints, getExplorers } from 'ether-state';
 import type { EvmClientConfig } from 'ether-state';
+import { viemTransport } from 'ether-state/viem';
+import { createPublicClient } from 'viem';
 const config: EvmClientConfig = { network: { chainId: 1n } };
-void EvmClient.make(config);
+const evm = EvmClient.make(config);
+void evm;
+declare const client: EvmClient;
+createPublicClient({ transport: viemTransport(client) });
 void getRpcEndpoints(1n);
 void getExplorers(8453n);
 // @ts-expect-error Chain IDs use bigint.

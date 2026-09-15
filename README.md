@@ -19,6 +19,34 @@ Reorg recovery, endpoint capability learning, and failure recovery still need wo
 
 See [examples](examples/README.md) for runnable scripts and short feature guides.
 
+## Viem Public Client
+
+The `ether-state/viem` subpath adapts public Viem requests to an existing EvmClient. It does not add wallet, account, or signing behavior. Viem stays outside the root package entry point.
+
+```ts
+import { Effect } from "effect"
+import { createPublicClient } from "viem"
+import { base } from "viem/chains"
+import { EvmClient } from "ether-state"
+import { viemTransport } from "ether-state/viem"
+
+const program = Effect.gen(function* () {
+  const evm = yield* EvmClient.make({ network: { chainId: 8453n } })
+  const publicClient = createPublicClient({ chain: base, transport: viemTransport(evm) })
+  return yield* Effect.promise(() => publicClient.getBlockNumber())
+})
+```
+
+The adapter uses EvmClient for retries, batching, endpoint selection, and shared block and log streams. It rejects wallet methods and node-managed filter lifecycle methods. It accepts `eth_sendRawTransaction` only for an already signed transaction.
+
+Run the live Base comparison for 60 seconds per client:
+
+```sh
+BASE_RPC_HTTP_URL=https://your-base-rpc.example bun run bench:viem
+```
+
+Set `BENCH_DURATION_MS`, `BENCH_CONCURRENCY`, `BENCH_WORKLOAD`, or `BENCH_ADDRESS` to change the run. Set `BENCH_OUTPUT` to write clean JSON to a file. The benchmark sends reads through one local counting proxy and reports latency, throughput, failure, byte, envelope, JSON-RPC item, retry, and concurrency counts.
+
 ## Development
 
 Use Bun 1.3.3.
@@ -37,13 +65,14 @@ Live tests use real Ethereum RPCs and always run in CI. Public endpoints can tim
 
 TypeScript emits ESM and declarations. Bun builds the CommonJS entry point. The base tsconfig checks source and examples; the build config includes only source. The CommonJS entry requires a runtime that can load Effect's ESM dependency. Node and browser compatibility are not tested in CI.
 
-Runtime dependencies are Effect and ethers. Development dependencies are TypeScript, ESLint with its TypeScript rules, and Node type definitions. npm is used only by the release workflow for publishing.
+Runtime dependencies are Effect and ethers. Viem and the Anvil binary are development-only compatibility-test dependencies. npm is used only by the release workflow for publishing.
 
 ## Source layout
 
 ```text
 src/
   index.ts
+  viem.ts            optional Viem Public Client transport
   rpc/
     client.ts       client setup and orchestration
     schema.ts       RPC schemas and method types
@@ -61,7 +90,6 @@ src/
 
 ## Later
 
-- [Viem adapter](https://github.com/0xjimmy/ether-state/issues/7)
 - [Indexing and storage](https://github.com/0xjimmy/ether-state/issues/8)
 - [Local state and simulation](https://github.com/0xjimmy/ether-state/issues/9)
 
