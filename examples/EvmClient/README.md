@@ -12,9 +12,9 @@ bun examples/EvmClient/read.ts
 
 `client.fetch({ method, params })` infers RPC input and output types. Compatible concurrent `client.call` reads use Multicall3 by default. The collection window is zero milliseconds, so a full batch flushes at once and other calls made in the same task can join it. Calls with sender, value, gas, or state context use direct reads. Set `multicall: false` to force a direct read. Multicall changes the caller seen by the contract, so use direct reads when that matters.
 
-## Shared block watches
+## Watch blocks
 
-[watch-blocks.ts](watch-blocks.ts) preserves the original live script. It watches Ethereum and chain 4663, prints block latency, and shares Ethereum data between number-only and full-block consumers.
+[watch-blocks.ts](watch-blocks.ts) watches Base blocks and prints transaction counts, log counts, and block latency. Set `CHAIN_ID` to select another chain. No RPC URL is required.
 
 ```sh
 bun examples/EvmClient/watch-blocks.ts
@@ -22,7 +22,7 @@ bun examples/EvmClient/watch-blocks.ts
 
 `watchBlocks()` gives block metadata. `{ full: true }` includes transactions. `{ full: true, logs: true }` also requests receipts and exposes their logs. Extra data can require extra RPC calls; subscribers reuse the fetched data. `watchLogs` filters that shared log data, and `watchTransactions` filters full transactions.
 
-The second chain is configurable in the script. Change it to Base, `8453n`, to enable its USDC transfer formatter. That formatter reads the existing block logs and makes no RPC calls. `latencyMs` is local receive time minus block timestamp, not HTTP round-trip time.
+`latencyMs` is local receive time minus block timestamp, not HTTP round-trip time.
 
 `watchCall` reads a contract on new blocks. `watchState` exposes Loading, Ready, and Retrying state through a SubscriptionRef. These features still need broader recovery tests; reorg handling is not complete.
 
