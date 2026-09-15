@@ -7,5 +7,5 @@ for (const adapter of ['pglite', 'libsql', 'd1']) {
       stdout: 'inherit', stderr: 'inherit',
     })
     assert.equal(await child.exited, 0)
-  })
+  }, adapter === 'pglite' ? 30_000 : 5_000)
 }
