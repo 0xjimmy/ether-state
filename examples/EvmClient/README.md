@@ -10,7 +10,7 @@ EvmClient manages endpoint selection, typed RPC calls, batching, cached reads, a
 bun examples/EvmClient/read.ts
 ```
 
-`client.fetch({ method, params })` infers RPC input and output types. Compatible concurrent `client.call` reads can use Multicall3. The default batch window is 100 ms. Calls with sender or value context use direct reads; set `multicall: false` to force a direct read. Multicall changes the caller seen by the contract, so use direct reads when that matters.
+`client.fetch({ method, params })` infers RPC input and output types. Compatible concurrent `client.call` reads use Multicall3 by default. The collection window is zero milliseconds, so a full batch flushes at once and other calls made in the same task can join it. Calls with sender, value, gas, or state context use direct reads. Set `multicall: false` to force a direct read. Multicall changes the caller seen by the contract, so use direct reads when that matters.
 
 ## Shared block watches
 

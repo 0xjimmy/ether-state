@@ -52,6 +52,19 @@ test('live Base RPC: Viem public reads match the EvmClient adapter', async () =>
       const actual = yield* Effect.promise(adaptedChecks[index])
       assert.deepEqual(actual, expected)
     }
+    const abi = [
+      { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
+      { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
+      { type: 'function', name: 'totalSupply', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+    ]
+    const readContracts = client => Promise.all(abi.map(item => client.readContract({
+      address: weth, abi: [item], functionName: item.name, blockNumber,
+    })))
+    const expectedContracts = yield* Effect.promise(() => readContracts(direct))
+    const beforeBatches = evm.metrics.multicall.batches
+    const actualContracts = yield* Effect.promise(() => readContracts(adapted))
+    assert.deepEqual(actualContracts, expectedContracts)
+    assert.ok(evm.metrics.multicall.batches > beforeBatches, 'concurrent Viem reads did not use Multicall3')
   }))
 }, 120000)
 
