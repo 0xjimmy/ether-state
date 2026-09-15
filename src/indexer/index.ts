@@ -420,20 +420,22 @@ export class Indexer<Value, Encoded, TransformError, StoreError> {
 		if (checkpoint === null) return Effect.succeed(null)
 		return Effect.gen({ self: this }, function* () {
 			if (checkpoint.finalized !== null) {
-				const finalized = yield* fetchBlock(this.client, checkpoint.finalized.number, false).pipe(Effect.option)
-				if (finalized._tag === "None" || finalized.value.hash !== checkpoint.finalized.hash) {
+				const finalized = yield* fetchBlock(this.client, checkpoint.finalized.number, false)
+				if (finalized.hash !== checkpoint.finalized.hash) {
 					return yield* Effect.fail<FinalizedChainConflict>({ _tag: "FinalizedChainConflict", anchor: checkpoint.finalized })
 				}
 			}
 			if (!force) {
-				const current = yield* fetchBlock(this.client, checkpoint.number, false).pipe(Effect.option)
-				if (current._tag === "Some" && current.value.hash === checkpoint.hash) return checkpoint
+				const current = yield* fetchBlock(this.client, checkpoint.number, false).pipe(Effect.catch((error) =>
+					error.cause === undefined ? Effect.succeed(null) : Effect.fail(error)))
+				if (current !== null && current.hash === checkpoint.hash) return checkpoint
 			}
 			const recent = yield* this.store.recent(this.index.id, this.index.version, this.reorgDepth)
 			let ancestor: IndexedBlock | undefined
 			for (const stored of recent) {
-				const canonical = yield* fetchBlock(this.client, stored.number, false).pipe(Effect.option)
-				if (canonical._tag === "Some" && canonical.value.hash === stored.hash) {
+				const canonical = yield* fetchBlock(this.client, stored.number, false).pipe(Effect.catch((error) =>
+					error.cause === undefined ? Effect.succeed(null) : Effect.fail(error)))
+				if (canonical !== null && canonical.hash === stored.hash) {
 					ancestor = stored
 					break
 				}

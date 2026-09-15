@@ -154,3 +154,20 @@ test('callback store acknowledges apply and revert changes with checkpoints', as
   assert.equal(changes[0].checkpoint, checkpoint)
   assert.equal(changes[1].checkpoint, null)
 })
+
+test('RPC failure during recovery preserves the checkpoint and rows', async () => {
+  const chain = { value: original }
+  const memory = memoryStore()
+  const client = fakeClient(chain)
+  const indexer = await Effect.runPromise(Indexer.make({ client, index: definition, store: memory.store }))
+  await Effect.runPromise(indexer.sync(3n))
+  // Exercise recovery without a finalized anchor, as on chains without that RPC tag.
+  memory.state.checkpoint = { ...memory.state.checkpoint, finalized: null }
+  const before = structuredClone(memory.state)
+  const fetch = client.fetchOne.bind(client)
+  client.fetchOne = request => request.method === 'eth_getBlockByNumber'
+    ? Effect.fail({ _tag: 'RpcError', code: -32000, message: 'temporary outage' }) : fetch(request)
+  const failure = await Effect.runPromise(Effect.flip(indexer.sync(3n)))
+  assert.equal(failure._tag, 'IndexBlockUnavailable')
+  assert.deepEqual(memory.state, before)
+})
