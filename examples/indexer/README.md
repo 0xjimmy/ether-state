@@ -1,48 +1,71 @@
-# Indexer
+# Indexer examples
 
-`base-blocks.ts` creates one EvmClient for Base, indexes the latest three blocks into an in-memory PGlite database, and then follows live head and reconciliation signals.
+Run each file from the repository root after `bun install`. No settings are required. Each example gives EvmClient a chain ID. The client selects RPC endpoints and estimates the block time.
+
+## Watch blocks
 
 ```sh
-BASE_RPC_HTTP_URL=https://your-base-rpc.example bun examples/indexer/base-blocks.ts
+bun examples/indexer/base-blocks.ts
 ```
 
-Stop the script after it prints three checkpoints. Replace the in-memory PGlite object with a filesystem or browser-backed PGlite object to persist the checkpoint.
+Starts two blocks before the Base head, stores block hashes and transaction counts in an in-memory PGlite database, and follows new blocks. It prints each checkpoint. Stop with Ctrl+C.
 
-## Transfer and V3 event examples
+For a block stream without storage, run `bun examples/EvmClient/watch-blocks.ts`.
 
-Run `events.ts transfers` for ERC-20 transfers, or `events.ts v3` for V3 pool events. Both use Ethereum by default. Set `RPC_HTTP_URL` and `CHAIN_ID` to use another chain. `START_BLOCK` is required and is inclusive.
-
-Index USDC transfers to or from a user:
+## ERC-20 transfers and metadata
 
 ```sh
-START_BLOCK=20000000 END_BLOCK=20000010 \
+bun examples/indexer/erc20-transfers.ts
+```
+
+Starts four blocks before the Ethereum head and follows transfers across all token addresses. For each new address, it attempts `name`, `symbol`, and `decimals` calls. It caches the result, then stores and prints the transfers. Calls run in small concurrent groups.
+
+There are two data tables:
+
+- `ether_state_rows` stores transfers with their transaction hash, log index, and block hash.
+- `erc20_metadata` stores one metadata result per chain and token address.
+
+The store also maintains internal block and checkpoint tables. PGlite runs in memory by default. Set `INDEX_DB=./erc20-data` to keep data on disk. With the same filters, the script reads the stored start block and resumes from its checkpoint. Use a separate database for each chain and run one writer per index.
+
+Metadata is a first-observed cache from the latest state. It is not historical token state. Missing methods, invalid results, and failed calls become `NULL` fields. The cache keeps these failed attempts too, so repeated transfers do not repeat the calls. Delete a token's cache row to try again. Metadata can change after the first read. A reorg removes orphaned transfers but keeps this cache.
+
+ERC-721 Transfer logs are excluded by their different topic layout. An ERC-20-shaped log does not prove that the contract is a valid token. Amounts stay as decimal strings in raw token units.
+
+## Uniswap V3 pool events
+
+```sh
+bun examples/indexer/uniswap-v3.ts
+```
+
+Starts four blocks before the Ethereum head. One index selects all nine V3 pool event types: Initialize, Mint, Burn, Collect, Swap, Flash, IncreaseObservationCardinalityNext, SetFeeProtocol, and CollectProtocol.
+
+The callback store prints each event to the console. It keeps only the checkpoint and the last 128 block records in memory. It prints `Revert` with orphaned block hashes when the index detects a reorg. Console output is not durable storage.
+
+Mint adds liquidity. Burn removes liquidity. Collect withdraws tokens. Swap amounts are signed changes to pool balances. The output shows each token moving in or out of the pool. A buy or sale depends on which token you select as the base asset. V3 has no Sync event. See the [official V3 pool event interface](https://github.com/Uniswap/v3-core/blob/main/contracts/interfaces/pool/IUniswapV3PoolEvents.sol).
+
+By default, the index matches these signatures across all contracts, including compatible forks. It does not check Uniswap factory membership. Set `POOLS` to comma-separated verified pool addresses to restrict the stream.
+
+## Optional settings
+
+| Setting | Effect |
+| --- | --- |
+| `CHAIN_ID` | Select another chain. Block examples default to Base, `8453`. Event examples default to Ethereum, `1`. |
+| `START_BLOCK` | Select the first block, inclusive. Otherwise, use recent blocks or the stored ERC-20 checkpoint. |
+| `END_BLOCK` | Index through this block, inclusive, then exit. Otherwise, follow new blocks. |
+| `TOKEN` | Select one ERC-20 contract. |
+| `USER_ADDRESS` | Select ERC-20 transfers to or from this address. |
+| `DIRECTION` | Select `both`, `from`, or `to`. Applies with `USER_ADDRESS`. The default is `both`. |
+| `INDEX_DB` | Keep the ERC-20 PGlite database at this path. |
+| `POOLS` | Select V3 pool addresses, separated by commas. |
+
+For example, a finite transfer run:
+
+```sh
+START_BLOCK=20000000 END_BLOCK=20000002 \
 TOKEN=0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 \
-USER_ADDRESS=0xYourUserAddress \
-bun examples/indexer/events.ts transfers
+bun examples/indexer/erc20-transfers.ts
 ```
 
-Replace the user address. Omit `USER_ADDRESS` to select all users. Omit `TOKEN` to select all contracts with the ERC-20 Transfer event layout. Use `DIRECTION=from` or `DIRECTION=to` for one direction. The default is `both`. A self-transfer produces one row.
+Event watchers stay two blocks behind the head. An explicit `END_BLOCK` overrides this policy. Public endpoints must support the selected historical range. All watchers stop with Ctrl+C.
 
-RPC topic filters use `null` as a wildcard. The incoming filter is `[Transfer, null, user]`. The outgoing filter is `[Transfer, user]`. Each topic position is an AND condition, so `[Transfer, user, user]` selects only self-transfers. For `both`, this example fetches Transfer events and checks either address in the transform. This can fetch many events if you omit `TOKEN`. ERC-721 Transfer events have a different layout and are excluded. A matching signature alone does not prove that a contract is a valid token.
-
-Index swaps, added liquidity, removed liquidity, and collections for one pool:
-
-```sh
-START_BLOCK=20000000 END_BLOCK=20000020 \
-POOLS=0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640 \
-bun examples/indexer/events.ts v3
-```
-
-Use comma-separated `POOLS` for several pools. Use `EVENTS=swaps` or `EVENTS=liquidity` to select one group. The default is `all`, which selects Swap, Mint, Burn, and Collect. This does not include Flash or pool administration events.
-
-Omit `POOLS` to match these event signatures across all contracts. This includes compatible forks and contracts that emit the same signatures. It does not verify Uniswap factory membership. To restrict indexing to official Uniswap pools, supply verified pool addresses. Automatic factory discovery is not part of this example.
-
-The event fields follow the [Uniswap V3 pool interface](https://github.com/Uniswap/v3-core/blob/main/contracts/interfaces/pool/IUniswapV3PoolEvents.sol). Amounts are decimal strings in raw token units. Swap amounts are signed changes to pool balances. Mint and Burn amounts measure liquidity. Collect records tokens collected and must not count as another liquidity removal. Pool position owners can be position manager contracts. These events do not identify the NFT owner by themselves.
-
-### Follow new blocks and resume
-
-Omit `END_BLOCK` to continue with live indexing. The example stays two blocks behind the head. Set `INDEX_DB=./event-index-data` to keep the database on disk. Stop with Ctrl+C. Run again with the same filters and start block to resume. Use a separate database for each chain. Run one process per index and database.
-
-With `END_BLOCK`, the script indexes that inclusive range, prints the stored rows, and exits. The explicit end block overrides the two-block confirmation policy. Use a historical end block for a repeatable check. Without `INDEX_DB`, data stays in memory for that run only.
-
-The tables store individual events and block metadata. They do not calculate current balances, current liquidity, or fees earned. A start block after a position was created provides only changes from that point.
+The old `events.ts transfers` and `events.ts v3` commands still select the corresponding script. `event-index.ts` is the shared index definition. `storage-types.ts` is a type-check fixture, not a runnable example.
