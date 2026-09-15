@@ -4,6 +4,7 @@ Run these from the repository root after `bun install`. They import the local so
 
 - [EvmClient](EvmClient/README.md): typed reads, Multicall3, shared block watches, and historical streams.
 - [Chainlist utilities](chainlist-utilities/README.md): RPC endpoints, explorers, chain metadata, and errors.
+- [Indexer](indexer/README.md): typed block transforms, PGlite checkpoints, and live reconciliation.
 
 All network examples use real public services. They are examples, not tests. Availability, rate limits, and historical data support vary by endpoint. The finite examples have timeouts; stop watchers with Ctrl+C.
 

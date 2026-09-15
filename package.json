@@ -24,9 +24,14 @@
     "ethers": "^6.17.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20260915.1",
+    "@electric-sql/pglite": "0.5.8",
     "@foundry-rs/anvil": "1.7.1",
+    "@libsql/client": "0.18.0",
+    "@types/emscripten": "1.41.6",
     "@types/node": "^22.20.2",
     "eslint": "10.10.0",
+    "miniflare": "3.20250718.3",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.0",
     "viem": "^2.56.5"
@@ -58,6 +63,46 @@
       "require": {
         "types": "./dist/esm/viem.d.ts",
         "default": "./dist/cjs/viem.cjs"
+      }
+    },
+    "./indexer": {
+      "import": {
+        "types": "./dist/esm/indexer.d.ts",
+        "default": "./dist/esm/indexer.js"
+      },
+      "require": {
+        "types": "./dist/esm/indexer.d.ts",
+        "default": "./dist/cjs/indexer.cjs"
+      }
+    },
+    "./indexer/pglite": {
+      "import": {
+        "types": "./dist/esm/indexer-pglite.d.ts",
+        "default": "./dist/esm/indexer-pglite.js"
+      },
+      "require": {
+        "types": "./dist/esm/indexer-pglite.d.ts",
+        "default": "./dist/cjs/indexer-pglite.cjs"
+      }
+    },
+    "./indexer/libsql": {
+      "import": {
+        "types": "./dist/esm/indexer-libsql.d.ts",
+        "default": "./dist/esm/indexer-libsql.js"
+      },
+      "require": {
+        "types": "./dist/esm/indexer-libsql.d.ts",
+        "default": "./dist/cjs/indexer-libsql.cjs"
+      }
+    },
+    "./indexer/d1": {
+      "import": {
+        "types": "./dist/esm/indexer-d1.d.ts",
+        "default": "./dist/esm/indexer-d1.js"
+      },
+      "require": {
+        "types": "./dist/esm/indexer-d1.d.ts",
+        "default": "./dist/cjs/indexer-d1.cjs"
       }
     },
     "./package.json": "./package.json"
