@@ -475,6 +475,7 @@ export class EvmClient {
 	private readonly reads: MulticallReads
 	private readonly scheduler: RequestScheduler
 	private readonly callStreams = new Map<string, Stream.Stream<WatchedCall<string>, CallError | Schema.SchemaError>>()
+	private closed = false
 
 	private constructor(
 		readonly config: ResolvedEvmClientConfig,
@@ -597,6 +598,7 @@ export class EvmClient {
 				queries,
 				live,
 			)
+			yield* Effect.addFinalizer(() => Effect.sync(() => { client.closed = true }))
 			client.fullBlocks = yield* Stream.share(client.fullBlocks, { capacity: 16, replay: 1 })
 			client.receiptBlocks = yield* Stream.share(client.withDemand("receiptUsers", client.fullBlocks.pipe(
 				Stream.mapEffect((block) => live.waitReceipts(block)),
@@ -627,6 +629,10 @@ export class EvmClient {
 
 	get endpoints(): Effect.Effect<ReadonlyMap<string, EndpointState>> {
 		return SubscriptionRef.get(this.endpointState)
+	}
+
+	get isClosed(): boolean {
+		return this.closed
 	}
 
 	get queryCache(): Effect.Effect<RpcQueryCacheStats> {
