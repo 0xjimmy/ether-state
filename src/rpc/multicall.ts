@@ -23,23 +23,27 @@ export interface ContractRead {
 
 export class MulticallReads {
 	private readonly groups = new Map<string, BatchQueue<RpcTransactionRequest, string, CallError>>()
-	readonly stats = { batches: 0, calls: 0 }
+	readonly stats = { batches: 0, calls: 0, singles: 0, fallbacks: 0 }
 
 	constructor(private readonly options: {
 		readonly scope: Scope.Scope; readonly window: number; readonly size: number; readonly capacity: number
+		readonly maxCalldataBytes: number
 		readonly fetch: (transaction: RpcTransactionRequest, block: RpcBlockReference) => Effect.Effect<string, EvmClientError>
 		readonly code: (block: RpcBlockReference) => Effect.Effect<string, EvmClientError>
 	}) {}
 
 	request(read: ContractRead & { readonly block: RpcBlockReference; readonly blockNumber: bigint }): Effect.Effect<string, CallError> {
-		if (read.multicall === false || typeof read.transaction.to !== "string" ||
+		if (read.multicall === false || typeof read.transaction.to !== "string" || read.transaction.to.toLowerCase() === address.toLowerCase() ||
 			Object.keys(read.transaction).some((key) => key !== "to" && key !== "data" && key !== "input")) {
+			this.stats.singles++
 			return this.options.fetch(read.transaction, read.block)
 		}
 		const key = JSON.stringify(read.block, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value)
 		let queue = this.groups.get(key)
 		if (queue === undefined) {
-			queue = new BatchQueue({ ...this.options, run: (calls) => this.run(calls, read.block, read.blockNumber) })
+			queue = new BatchQueue({ ...this.options, maxWeight: this.options.maxCalldataBytes,
+				weight: (call) => Math.max(0, ((call.data ?? call.input ?? "0x").length - 2) / 2),
+				run: (calls) => this.run(calls, read.block, read.blockNumber) })
 			this.groups.set(key, queue)
 		}
 		const selected = queue
@@ -49,10 +53,16 @@ export class MulticallReads {
 	}
 
 	private run(calls: readonly RpcTransactionRequest[], block: RpcBlockReference, blockNumber: bigint): Effect.Effect<readonly Exit.Exit<string, CallError>[], CallError> {
-		const singles = () => Effect.forEach(calls, (call) => Effect.exit(this.options.fetch(call, block)), { concurrency: 4 })
+		const singles = () => {
+			this.stats.singles += calls.length
+			return Effect.forEach(calls, (call) => Effect.exit(this.options.fetch(call, block)), { concurrency: 4 })
+		}
 		if (calls.length === 1) return singles()
 		return Effect.gen({ self: this }, function* () {
-			if ((yield* this.options.code(block)) === "0x") return yield* singles()
+			if ((yield* this.options.code(block)) === "0x") {
+				this.stats.fallbacks++
+				return yield* singles()
+			}
 			this.stats.batches++
 			this.stats.calls += calls.length
 			const data = abi.encodeFunctionData("aggregate3", [[
@@ -69,7 +79,7 @@ export class MulticallReads {
 			}
 			return results.slice(0, calls.length).map(([success, data]): Exit.Exit<string, CallError> => success
 				? Exit.succeed(data) : Exit.fail<ContractReverted>({ _tag: "ContractReverted", data }))
-		}).pipe(Effect.catch(() => singles()))
+		}).pipe(Effect.catch(() => Effect.sync(() => { this.stats.fallbacks++ }).pipe(Effect.andThen(singles()))))
 	}
 }
 

@@ -37,7 +37,11 @@ const program = Effect.gen(function* () {
 })
 ```
 
-The adapter uses EvmClient for retries, batching, endpoint selection, and shared block and log streams. It rejects wallet methods and node-managed filter lifecycle methods. It accepts `eth_sendRawTransaction` only for an already signed transaction.
+The adapter uses EvmClient for retries, batching, endpoint selection, and shared block and log streams. Concurrent plain `eth_call` reads use Multicall3. Other compatible concurrent HTTP reads use JSON-RPC batches. Calls with sender, value, gas, or state context remain direct calls. The adapter does not wrap a call that already targets Multicall3.
+
+The defaults use a zero-millisecond collection window, 20 items per batch, 256 KB per HTTP batch, and 1,024 calldata bytes per Multicall3 batch. `httpBatchWindow`, `httpBatchMaxItems`, `httpBatchMaxBytes`, `multicallWindow`, `multicallMaxCalls`, and `multicallMaxCalldataBytes` can change these limits. `hedgeDelay` controls when a second endpoint starts if the first endpoint does not answer; its default is 100 ms. The old `batchWindow` and `batchSize` options remain aliases for compatibility.
+
+Viem `newHeads` and log subscriptions recover missed block numbers after a notification gap. Header watches fetch headers only. Log watches use one block-hash-pinned `eth_getLogs` request for each filter and block. The adapter rejects wallet methods and node-managed filter lifecycle methods. It accepts `eth_sendRawTransaction` only for an already signed transaction.
 
 Run the live Base comparison for 60 seconds per client:
 
@@ -45,7 +49,7 @@ Run the live Base comparison for 60 seconds per client:
 BASE_RPC_HTTP_URL=https://your-base-rpc.example bun run bench:viem
 ```
 
-Set `BENCH_DURATION_MS`, `BENCH_CONCURRENCY`, `BENCH_WORKLOAD`, or `BENCH_ADDRESS` to change the run. Set `BENCH_OUTPUT` to write clean JSON to a file. The benchmark sends reads through one local counting proxy and reports latency, throughput, failure, byte, envelope, JSON-RPC item, retry, and concurrency counts.
+Set `BENCH_DURATION_MS`, `BENCH_CONCURRENCY`, `BENCH_WORKLOAD`, or `BENCH_ADDRESS` to change the run. Workloads include `contractReads`, `distinct`, `dedupe`, `balance`, and `blockNumber`. Set `BENCH_HTTP_BATCH_WINDOW` or `BENCH_MULTICALL_WINDOW` to compare collection windows. Set `BENCH_OUTPUT` to write clean JSON to a file. The benchmark sends reads through isolated paths on one local counting proxy and reports latency, throughput, failure, byte, envelope, JSON-RPC item, and concurrency counts.
 
 ## Indexing
 

@@ -14,7 +14,7 @@ test('package exports only the current runtime API', async () => {
 test('batch queue collects reads and preserves per-item failures', async () => {
   await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     let batches = 0
-    const queue = new BatchQueue({ scope: yield* Scope.Scope, window: 5, size: 10, capacity: 20,
+    const queue = new BatchQueue({ scope: yield* Scope.Scope, window: 0, size: 10, capacity: 20,
       run: inputs => Effect.sync(() => { batches++; return inputs.map(value => value < 0 ? Exit.fail('negative') : Exit.succeed(value * 2)) }) })
     const results = yield* Effect.all([1, -1, 3].map(value => Effect.exit(queue.request(value))), { concurrency: 'unbounded' })
     assert.equal(batches, 1)
@@ -22,6 +22,28 @@ test('batch queue collects reads and preserves per-item failures', async () => {
     assert.ok(Exit.isFailure(results[1]))
     assert.equal(results[2].value, 6)
     assert.equal(queue.size, 0)
+  })))
+})
+
+test('batch queue flushes as soon as its item limit is full', async () => {
+  await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const batches = []
+    const queue = new BatchQueue({ scope: yield* Scope.Scope, window: 10_000, size: 2, capacity: 20,
+      run: inputs => Effect.sync(() => { batches.push([...inputs]); return inputs.map(Exit.succeed) }) })
+    const result = yield* Effect.all([queue.request(1), queue.request(2)], { concurrency: 'unbounded' }).pipe(Effect.timeout('500 millis'))
+    assert.deepEqual(result, [1, 2])
+    assert.deepEqual(batches, [[1, 2]])
+  })))
+})
+
+test('batch queue limits each batch by weight', async () => {
+  await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const batches = []
+    const queue = new BatchQueue({ scope: yield* Scope.Scope, window: 1, size: 10, maxWeight: 3,
+      weight: value => value.length, capacity: 20,
+      run: inputs => Effect.sync(() => { batches.push([...inputs]); return inputs.map(Exit.succeed) }) })
+    yield* Effect.all(['aa', 'bb', 'c'].map(value => queue.request(value)), { concurrency: 'unbounded' })
+    assert.deepEqual(batches, [['aa'], ['bb', 'c']])
   })))
 })
 
