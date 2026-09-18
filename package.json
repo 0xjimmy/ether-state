@@ -20,8 +20,7 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "effect": "^4.0.0-rc.115",
-    "ethers": "^6.17.0"
+    "effect": "^4.0.0-rc.115"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260915.1",
@@ -31,6 +30,7 @@
     "@types/emscripten": "1.41.6",
     "@types/node": "^22.20.2",
     "eslint": "10.10.0",
+    "ethers": "^6.17.0",
     "miniflare": "3.20250718.3",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.0",
