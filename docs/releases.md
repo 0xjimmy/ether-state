@@ -11,15 +11,15 @@ Use PRs for changes to both branches. Do not push directly to `release`.
 6. The workflow repeats CI, publishes to npm, creates the versioned GitHub Release,
    and publishes the GitHub Packages copy. No separate deployment approval is required.
 
-For `0.2.3`, the outputs are:
+For `0.3.0`, the outputs are:
 
 | Destination | Name |
 | --- | --- |
-| npm | `ether-state@0.2.3`, tag `latest` |
-| GitHub Release | Title `v0.2.3`, tag `v0.2.3` |
-| GitHub Packages | `@0xjimmy/ether-state@0.2.3` |
+| npm | `ether-state@0.3.0`, tag `latest` |
+| GitHub Release | Title `v0.3.0`, tag `v0.3.0` |
+| GitHub Packages | `@0xjimmy/ether-state@0.3.0` |
 
-The publish job is named `Release v0.2.3`. The deployment environment is named
+The publish job is named `Release v0.3.0`. The deployment environment is named
 `npm` because npm trusted publishing binds to that name. Its URL points to the
 versioned GitHub Release.
 
