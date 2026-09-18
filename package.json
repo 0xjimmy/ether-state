@@ -1,6 +1,6 @@
 {
   "name": "ether-state",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Library for syncing state from contracts.",
   "repository": {
     "type": "git",
