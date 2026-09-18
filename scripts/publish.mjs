@@ -6,7 +6,7 @@ if (process.env['GITHUB_REF'] !== 'refs/heads/release' || process.env['GITHUB_RE
   throw new Error('Publishing requires a push to 0xjimmy/ether-state release')
 }
 const pkg = JSON.parse(await readFile('package.json', 'utf8'))
-const version = releaseVersion(pkg, JSON.parse(await readFile('package-lock.json', 'utf8')))
+const version = releaseVersion(pkg)
 const response = await fetch('https://registry.npmjs.org/ether-state')
 if (!response.ok) throw new Error(`Registry check failed: ${response.status}`)
 const metadata = await response.json()

@@ -1,71 +1,82 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { build } from 'esbuild'
-import { githubPackageManifest } from './github-release.mjs'
 
 const root = process.cwd()
 const directory = path.join(root, '.tmp/package')
 await rm(directory, { recursive: true, force: true })
 await mkdir(directory, { recursive: true })
-const originalManifest = await readFile('package.json', 'utf8')
-let packed
+const manifest = await readFile('package.json', 'utf8')
+const pkg = JSON.parse(manifest)
+const archive = path.join(directory, `${pkg.name}-${pkg.version}.tgz`)
+const run = (args, cwd = root) => execFileSync(process.execPath, args, { cwd, stdio: 'inherit' })
 try {
-  if (process.env['GITHUB_REF'] === 'refs/heads/release' && process.env['GITHUB_EVENT_NAME'] === 'push') {
-    const sourceCommit = process.env['GITHUB_SHA']
-    if (!/^[a-f0-9]{40}$/.test(sourceCommit)) throw new Error('Invalid release source commit')
-    await writeFile('package.json', JSON.stringify({ ...JSON.parse(originalManifest), gitHead: sourceCommit }, null, 2))
+  if (process.env.GITHUB_REF === 'refs/heads/release' && process.env.GITHUB_EVENT_NAME === 'push') {
+    const gitHead = process.env.GITHUB_SHA
+    assert.match(gitHead ?? '', /^[a-f0-9]{40}$/)
+    await writeFile('package.json', JSON.stringify({ ...pkg, gitHead }))
   }
-  packed = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory], { encoding: 'utf8' }))[0]
+  run(['pm', 'pack', '--ignore-scripts', '--filename', archive, '--quiet'])
 } finally {
-  await writeFile('package.json', originalManifest)
+  await writeFile('package.json', manifest)
 }
-const files = packed.files.map(file => file.path)
-for (const file of ['dist/esm/index.js', 'dist/esm/index.d.ts', 'dist/cjs/index.js', 'dist/cjs/index.d.ts', 'dist/cjs/package.json', 'LICENSE', 'README.md']) {
+const files = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n').map(file => file.replace(/^package\//, ''))
+for (const file of [
+  'dist/esm/index.js', 'dist/esm/index.d.ts', 'dist/cjs/index.cjs',
+  'dist/esm/viem.js', 'dist/esm/viem.d.ts', 'dist/cjs/viem.cjs',
+  'dist/esm/indexer.js', 'dist/esm/indexer.d.ts', 'dist/cjs/indexer.cjs',
+  'dist/esm/indexer-pglite.js', 'dist/esm/indexer-pglite.d.ts', 'dist/cjs/indexer-pglite.cjs',
+  'dist/esm/indexer-libsql.js', 'dist/esm/indexer-libsql.d.ts', 'dist/cjs/indexer-libsql.cjs',
+  'dist/esm/indexer-d1.js', 'dist/esm/indexer-d1.d.ts', 'dist/cjs/indexer-d1.cjs',
+  'LICENSE', 'README.md'
+]) {
   assert.ok(files.includes(file), `Missing package file: ${file}`)
 }
-assert.ok(files.every(file => file.startsWith('dist/') || ['package.json', 'README.md', 'LICENSE'].includes(file)), 'Unexpected file in package')
-await writeFile(path.join(directory, 'package.json'), '{"private":true,"type":"module"}\n')
-execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', `./${packed.filename}`], { cwd: directory, stdio: 'inherit' })
-const scopedDirectory = path.join(directory, 'scoped')
-await mkdir(scopedDirectory)
-const scopedManifest = githubPackageManifest({ ...JSON.parse(originalManifest), gitHead: 'a'.repeat(40) })
-await writeFile(path.join(scopedDirectory, 'package.json'), JSON.stringify(scopedManifest))
-await cp('dist', path.join(scopedDirectory, 'dist'), { recursive: true })
-for (const file of ['README.md', 'LICENSE']) await copyFile(file, path.join(scopedDirectory, file))
-const scopedPack = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory], { cwd: scopedDirectory, encoding: 'utf8' }))[0]
-execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', `./${scopedPack.filename}`], { cwd: directory, stdio: 'inherit' })
+assert.ok(files.every(file => file.startsWith('dist/') || ['package.json', 'README.md', 'LICENSE'].includes(file)), 'Unexpected package file')
+assert.ok(!files.some(file => /\/test\./.test(file)), 'Example must not ship')
+await writeFile(path.join(directory, 'package.json'), '{"private":true,"type":"module"}')
+run(['add', '--ignore-scripts', archive], directory)
+run(['add', '--ignore-scripts', 'viem@2.56.5'], directory)
 await copyFile('test/runtime-smoke.mjs', path.join(directory, 'runtime-smoke.mjs'))
-await writeFile(path.join(directory, 'esm.mjs'), "import * as api from 'ether-state'; import * as ethers from 'ethers'; import { smoke } from './runtime-smoke.mjs'; if (await smoke(api, ethers) !== 'ok') throw Error('ESM failed');\n")
-await writeFile(path.join(directory, 'cjs.cjs'), "const api = require('ether-state'); const ethers = require('ethers'); import('./runtime-smoke.mjs').then(({smoke}) => smoke(api, ethers)).catch(error => { console.error(error); process.exitCode = 1; });\n")
-const runtime = process.env['TEST_RUNTIME'] ?? process.execPath
-for (const file of ['esm.mjs', 'cjs.cjs']) {
-  execFileSync(runtime, [file], { cwd: directory, stdio: 'inherit' })
-  const scopedFile = `scoped-${file}`
-  await writeFile(path.join(directory, scopedFile), (await readFile(path.join(directory, file), 'utf8')).replaceAll("'ether-state'", "'@0xjimmy/ether-state'"))
-  execFileSync(runtime, [scopedFile], { cwd: directory, stdio: 'inherit' })
-}
-const types = `import { EtherState, TriggerType, createERC20BalanceAction } from 'ether-state';
-import type { Action } from 'ether-state';
-import { JsonRpcProvider } from 'ethers';
-const action: Action = createERC20BalanceAction({type: TriggerType.BLOCK}, '0x00', '0x00', balance => { const typed: bigint = balance; return typed; });
-const state = new EtherState([action], new JsonRpcProvider());
-const done: Promise<void> = state.update(TriggerType.TIME);
-void done;
-// @ts-expect-error The callback must accept bigint.
-createERC20BalanceAction({type: TriggerType.BLOCK}, '0x00', '0x00', (value: string) => value);
-// @ts-expect-error Time triggers require an interval.
-const invalid: Action['trigger'] = {type: TriggerType.TIME};
-void invalid;
+await writeFile(path.join(directory, 'esm.mjs'), "import * as api from 'ether-state'; import { smoke } from './runtime-smoke.mjs'; await smoke(api);\n")
+await writeFile(path.join(directory, 'cjs.cjs'), "const api = require('ether-state'); import('./runtime-smoke.mjs').then(({ smoke }) => smoke(api)).catch(error => { console.error(error); process.exitCode = 1; });\n")
+await writeFile(path.join(directory, 'viem-esm.mjs'), "import { viemTransport } from 'ether-state/viem'; if (typeof viemTransport !== 'function') throw new Error('Missing Viem adapter');\n")
+await writeFile(path.join(directory, 'viem-cjs.cjs'), "const { viemTransport } = require('ether-state/viem'); if (typeof viemTransport !== 'function') throw new Error('Missing Viem adapter');\n")
+await writeFile(path.join(directory, 'indexer-esm.mjs'), "import { Indexer } from 'ether-state/indexer'; import { pgliteStore } from 'ether-state/indexer/pglite'; import { libsqlStore } from 'ether-state/indexer/libsql'; import { d1Store } from 'ether-state/indexer/d1'; if (![Indexer, pgliteStore, libsqlStore, d1Store].every(value => typeof value === 'function')) throw new Error('Missing indexer export');\n")
+await writeFile(path.join(directory, 'indexer-cjs.cjs'), "const core = require('ether-state/indexer'); const pg = require('ether-state/indexer/pglite'); const libsql = require('ether-state/indexer/libsql'); const d1 = require('ether-state/indexer/d1'); if (![core.Indexer, pg.pgliteStore, libsql.libsqlStore, d1.d1Store].every(value => typeof value === 'function')) throw new Error('Missing indexer export');\n")
+for (const file of ['esm.mjs', 'cjs.cjs', 'viem-esm.mjs', 'viem-cjs.cjs', 'indexer-esm.mjs', 'indexer-cjs.cjs']) run([file], directory)
+const types = `import { EvmClient, getRpcEndpoints, getExplorers } from 'ether-state';
+import type { EvmClientConfig } from 'ether-state';
+import { viemTransport } from 'ether-state/viem';
+import { createPublicClient } from 'viem';
+import { Effect, Schema } from 'effect';
+import { callbackStore, defineIndex, Indexer } from 'ether-state/indexer';
+import { pgliteStore } from 'ether-state/indexer/pglite';
+import { libsqlStore } from 'ether-state/indexer/libsql';
+import { d1Store } from 'ether-state/indexer/d1';
+import type { PGliteDatabase } from 'ether-state/indexer/pglite';
+import type { LibsqlClient } from 'ether-state/indexer/libsql';
+import type { D1Database } from 'ether-state/indexer/d1';
+const config: EvmClientConfig = { network: { chainId: 1n } };
+const evm = EvmClient.make(config);
+void evm;
+declare const client: EvmClient;
+createPublicClient({ transport: viemTransport(client) });
+defineIndex({ id: 'blocks', version: 1, startBlock: 0n, finality: { mode: 'latest' }, source: {},
+  valueSchema: Schema.String, transform: () => Effect.succeed([{ key: 'block', value: 'ok' }]) });
+declare const pg: PGliteDatabase;
+declare const sqlite: LibsqlClient;
+declare const d1: D1Database;
+void pgliteStore(pg); void libsqlStore(sqlite); void d1Store(d1); void Indexer;
+void callbackStore({ load: () => Effect.succeed(null), recent: () => Effect.succeed([]), write: () => Effect.void });
+void getRpcEndpoints(1n);
+void getExplorers(8453n);
+// @ts-expect-error Chain IDs use bigint.
+EvmClient.make({network: {chainId: '1'}});
+// @ts-expect-error Missing network.
+EvmClient.make({});
 `
-for (const extension of ['mts', 'cts']) {
-  await writeFile(path.join(directory, `consumer.${extension}`), types)
-  await writeFile(path.join(directory, `scoped-consumer.${extension}`), types.replaceAll("'ether-state'", "'@0xjimmy/ether-state'"))
-}
-execFileSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '--ignoreConfig', '--noEmit', '--strict', '--noUncheckedIndexedAccess', '--exactOptionalPropertyTypes', '--module', 'Node16', '--moduleResolution', 'Node16', '--target', 'ES2022', 'consumer.mts', 'consumer.cts', 'scoped-consumer.mts', 'scoped-consumer.cts'], { cwd: directory, stdio: 'inherit' })
-await writeFile(path.join(directory, 'browser.mjs'), "import * as api from 'ether-state'; import * as scoped from '@0xjimmy/ether-state'; import * as ethers from 'ethers'; import { smoke } from './runtime-smoke.mjs'; Promise.all([smoke(api, ethers), smoke(scoped, ethers)]).then(() => { document.body.textContent = 'ok'; }).catch(error => { document.body.textContent = String(error); throw error; });\n")
-await build({ entryPoints: [path.join(directory, 'browser.mjs')], bundle: true, platform: 'browser', format: 'esm', target: 'es2022', outfile: path.join(directory, 'bundle.js') })
-await writeFile(path.join(directory, 'index.html'), '<!doctype html><meta charset="utf-8"><title>ether-state package test</title><body>running<script type="module" src="/bundle.js"></script></body>')
-const pkg = JSON.parse(await readFile('package.json', 'utf8'))
-console.log(`Verified packed ${pkg.name}@${pkg.version}: ESM, CommonJS, declarations, browser bundle`)
+for (const extension of ['mts', 'cts']) await writeFile(path.join(directory, `consumer.${extension}`), types)
+run([path.join(root, 'node_modules/typescript/bin/tsc'), '--ignoreConfig', '--noEmit', '--strict', '--noUncheckedIndexedAccess', '--exactOptionalPropertyTypes', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', '--lib', 'ES2022,DOM,ESNext.Disposable', 'consumer.mts', 'consumer.cts'], directory)
+console.log(`Verified ${pkg.name}@${pkg.version}: tarball, ESM, CommonJS, declarations`)

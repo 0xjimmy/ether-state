@@ -1,10 +1,7 @@
-export function releaseVersion(packageJson, lockfile) {
+export function releaseVersion(packageJson) {
   if (packageJson.name !== 'ether-state') throw new Error('Unexpected package name')
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(packageJson.version)) {
     throw new Error('Only stable versions can publish from release')
-  }
-  if (packageJson.version !== lockfile.version || packageJson.version !== lockfile.packages?.['']?.version) {
-    throw new Error('Package and lockfile versions differ')
   }
   return packageJson.version
 }

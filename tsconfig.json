@@ -5,11 +5,12 @@
     "moduleResolution": "Node16",
     "lib": [
       "ES2022",
+      "ESNext.Disposable",
       "DOM"
     ],
-    "types": [],
-    "rootDir": "src",
-    "outDir": "dist/esm",
+    "types": [
+      "emscripten"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -35,6 +36,7 @@
     "verbatimModuleSyntax": true
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "examples/**/*.ts"
   ]
 }

@@ -11,7 +11,7 @@ if (process.env['GITHUB_REF'] !== 'refs/heads/release' || process.env['GITHUB_RE
 const token = process.env['GH_TOKEN']
 if (!token) throw new Error('GH_TOKEN is required')
 const pkg = JSON.parse(await readFile('package.json', 'utf8'))
-const version = releaseVersion(pkg, JSON.parse(await readFile('package-lock.json', 'utf8')))
+const version = releaseVersion(pkg)
 const metadata = await registryVersion(`https://registry.npmjs.org/ether-state/${version}`, { attempts: 60 })
 if (metadata === undefined) throw new Error('Published npm version is not available yet; rerun the job')
 const tarballUrl = new URL(metadata.dist.tarball)

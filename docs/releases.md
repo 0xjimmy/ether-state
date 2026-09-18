@@ -4,23 +4,22 @@
 Use PRs for changes to both branches. Do not push directly to `release`.
 
 1. Make a change on a feature branch and open a PR into `main`.
-2. Set the next stable version in `package.json` and `package-lock.json` on `main`.
-   Use `npm version patch --no-git-tag-version` when a patch version is required.
+2. Set the next stable version in `package.json` on `main`. Run `bun install` if dependencies change.
 3. Wait for `Verify` to pass. Review and merge the PR into `main`.
 4. Open a PR with base `release` and head `main`. Review the version and package changes.
 5. Merge that PR with a merge commit. Do not squash or rebase this branch promotion.
 6. The workflow repeats CI, publishes to npm, creates the versioned GitHub Release,
    and publishes the GitHub Packages copy. No separate deployment approval is required.
 
-For `0.2.3`, the outputs are:
+For `0.3.0`, the outputs are:
 
 | Destination | Name |
 | --- | --- |
-| npm | `ether-state@0.2.3`, tag `latest` |
-| GitHub Release | Title `v0.2.3`, tag `v0.2.3` |
-| GitHub Packages | `@0xjimmy/ether-state@0.2.3` |
+| npm | `ether-state@0.3.0`, tag `latest` |
+| GitHub Release | Title `v0.3.0`, tag `v0.3.0` |
+| GitHub Packages | `@0xjimmy/ether-state@0.3.0` |
 
-The publish job is named `Release v0.2.3`. The deployment environment is named
+The publish job is named `Release v0.3.0`. The deployment environment is named
 `npm` because npm trusted publishing binds to that name. Its URL points to the
 versioned GitHub Release.
 
@@ -34,13 +33,14 @@ existing tag that points to a different commit.
 
 The GitHub Packages copy uses the published npm files. Only its package name,
 repository metadata, and publishing configuration change. The npm package keeps
-its unscoped name. CI tests both package names through ESM, CommonJS, declarations,
-and browser code.
+its unscoped name. CI tests the npm tarball through ESM, CommonJS, and declarations.
+Unit tests check the GitHub package manifest conversion.
 
 A feature PR or a push to `main` cannot start publishing. Existing npm versions,
 GitHub releases, and GitHub package versions are skipped on reruns. A version
 cannot move the `latest` tag backwards. Prerelease versions and mismatched
-lockfiles fail the workflow. If a later step fails after npm publication, rerun
+dependency lockfiles fail the workflow. Bun installs use `--frozen-lockfile`.
+If a later step fails after npm publication, rerun
 the job. It resumes the missing work with the published npm files.
 
 Do not change a published version. Use a new version for a package fix. A GitHub

@@ -1,208 +1,146 @@
 # ether-state
 
-A Library for syncing state from contracts.
-Trigger Ethereum contract calls whenever there is a new block, matching event or by time interval. `ether-state` bundles calls with [Multicall2](https://github.com/mds1/multicall) to reduce the amount of RPC calls and tries to reduce the amount of event listeners needed for all actions.
+An Effect-based client for reading and watching EVM data. This branch is work toward 0.3, not a release. The old `EtherState` API has been removed.
 
-Originally designed for managing state in [Svelte Kit Ethers Template](https://github.com/0xjimmy/svelte-kit-ethers-template).
+```ts
+import { EvmClient, getChainList, getChain, getRpcEndpoints, getExplorers } from "ether-state"
+```
 
+## Client
 
-## Runtime support and development
+- Typed RPC methods, errors, and bigint conversion.
+- Chainlist discovery, chain validation, and inferred block time.
+- HTTP/WS request racing, WS reconnects, rate limits, and bounded queues.
+- Request deduplication, result caching, HTTP batching, and compatible Multicall3 reads.
+- Shared block, log, transaction, call, and state watches.
+- Historical logs, blocks, transactions, and receipts as collected results or streams.
 
-The package provides ESM imports for Node, Bun, and browser bundlers, plus a
-CommonJS entry point for `require`. CI checks Node 22, 24, and 26, the latest Bun,
-and current Chromium, Firefox, and WebKit through Playwright. Browser code uses a
-bundler to resolve the npm dependencies. The output target is ES2022.
+Reorg recovery, endpoint capability learning, and failure recovery still need work and tests. A successful live run does not prove that all recovery paths work.
+
+See [examples](examples/README.md) for runnable scripts and short feature guides.
+
+## Viem Public Client
+
+The `ether-state/viem` subpath adapts public Viem requests to an existing EvmClient. It does not add wallet, account, or signing behavior. Viem stays outside the root package entry point.
+
+```ts
+import { Effect } from "effect"
+import { createPublicClient } from "viem"
+import { base } from "viem/chains"
+import { EvmClient } from "ether-state"
+import { viemTransport } from "ether-state/viem"
+
+const program = Effect.gen(function* () {
+  const evm = yield* EvmClient.make({ network: { chainId: 8453n } })
+  const publicClient = createPublicClient({ chain: base, transport: viemTransport(evm) })
+  return yield* Effect.promise(() => publicClient.getBlockNumber())
+})
+```
+
+The adapter uses EvmClient for retries, batching, endpoint selection, and shared block and log streams. Concurrent plain `eth_call` reads use Multicall3. Other compatible concurrent HTTP reads use JSON-RPC batches. Calls with sender, value, gas, or state context remain direct calls. The adapter does not wrap a call that already targets Multicall3.
+
+The defaults use a zero-millisecond collection window, 20 items per batch, 256 KB per HTTP batch, and 1,024 calldata bytes per Multicall3 batch. `httpBatchWindow`, `httpBatchMaxItems`, `httpBatchMaxBytes`, `multicallWindow`, `multicallMaxCalls`, and `multicallMaxCalldataBytes` can change these limits. `hedgeDelay` controls when a second endpoint starts if the first endpoint does not answer; its default is 100 ms. The old `batchWindow` and `batchSize` options remain aliases for compatibility.
+
+Viem `newHeads` and log subscriptions recover missed block numbers after a notification gap. Header watches fetch headers only. Log watches use one block-hash-pinned `eth_getLogs` request for each filter and block. The adapter rejects wallet methods and node-managed filter lifecycle methods. It accepts `eth_sendRawTransaction` only for an already signed transaction.
+
+Run the live Base comparison for 60 seconds per client:
 
 ```sh
-npm ci --ignore-scripts
-npm run check
-npx playwright install --with-deps chromium firefox webkit
-npm run test:browser
+BASE_RPC_HTTP_URL=https://your-base-rpc.example bun run bench:viem
 ```
 
-Use Node 24 for development. `npm run check` checks types, runs type-aware lint,
-builds both formats, runs behavior tests, and installs the npm tarball in a clean
-consumer. The consumer checks ESM, CommonJS, and declarations, then builds the
-browser test bundle. `TEST_RUNTIME=bun npm run test:package` checks the same tarball
-with Bun. The RPC tests use fixed responses and ethers ABI encoding. They do not
-verify a live chain or a deployed Multicall contract.
+Set `BENCH_DURATION_MS`, `BENCH_CONCURRENCY`, `BENCH_WORKLOAD`, or `BENCH_ADDRESS` to change the run. Workloads include `contractReads`, `distinct`, `dedupe`, `balance`, and `blockNumber`. Set `BENCH_HTTP_BATCH_WINDOW` or `BENCH_MULTICALL_WINDOW` to compare collection windows. Set `BENCH_OUTPUT` to write clean JSON to a file. The benchmark sends reads through isolated paths on one local counting proxy and reports latency, throughput, failure, byte, envelope, JSON-RPC item, and concurrency counts.
 
-Compiler checks include `strict`, `noUncheckedIndexedAccess`,
-`exactOptionalPropertyTypes`, `noImplicitOverride`, `noPropertyAccessFromIndexSignature`,
-unused code checks, control-flow checks, and isolated declarations. Dependency
-checking stays enabled. The CommonJS build uses TypeScript's legacy Node resolver
-only for emission. Package-consumer tests use the modern Node16 resolver.
+## Indexing
 
-See [the release flow](docs/releases.md) for the `main` to `release` process.
-A release merge publishes to npm, creates a GitHub Release named `v<version>`,
-and publishes `@0xjimmy/ether-state` to GitHub Packages.
-
-## TODO
-- [ ] Start using Multicall3
-- [ ] Add more default actions and action generators  
-
-## Basic Usage
+The `ether-state/indexer` subpath adds typed, resumable indexes without putting database policy in EvmClient. One EvmClient can supply many index definitions for one network. Each index has its own ID, version, start block, finality policy, schema, and checkpoint.
 
 ```ts
-import { getDefaultProvider, formatEther, Interface, id, Log } from 'ethers';
-import { EtherState, Action, TriggerType } from 'ether-state';
+import { Effect, Schema } from "effect"
+import { defineIndex, Indexer } from "ether-state/indexer"
+import { pgliteStore } from "ether-state/indexer/pglite"
 
-const IERC20 = new Interface([
-	'function totalSupply() external view returns (uint256)',
-	'function balanceOf(address) external view returns (uint256)',
-	'event Transfer(address indexed from, address indexed to, uint256 value)',
-]);
+const blocks = defineIndex({
+  id: "blocks",
+  version: 1,
+  startBlock: 1n,
+  finality: { mode: "latest" },
+  source: { transactions: true },
+  valueSchema: Schema.Struct({ hash: Schema.String, transactions: Schema.Number }),
+  transform: bundle => Effect.succeed([{
+    key: "block",
+    value: { hash: bundle.block.hash, transactions: bundle.transactions.length },
+  }]),
+})
 
-// Check totalSupply of DAI every block, check balance of every DAI recipient on Transfer event
-const actions: Action[] = [
-	{
-		trigger: {
-			type: TriggerType.BLOCK
-		},
-		input: () => [],
-		call: {
-			target: () => '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI contract
-			interface: IERC20,
-			selector: 'totalSupply',
-		},
-		output: (returnParams) => {
-			console.log('DAI Total Supply:', formatEther(returnParams[0]));
-		},
-	},
-	{
-		trigger: {
-			type: TriggerType.EVENT,
-			eventFilter: {
-				address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
-				topics: [id('Transfer(address,address,uint256)')]
-			}
-		},
-		// Use the transfer recipient as the input param for balanceOf call
-		input: (log: Log) => {
-			const event = IERC20.decodeEventLog(
-				'Transfer',
-				log.data,
-				log.topics
-			);
-			console.log(
-				`${event.from} sent ${formatEther(event.value)} DAI to ${
-					event.to
-				}`
-			);
-			return [event.to];
-		},
-		call: {
-			target: () => '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI contract
-			interface: IERC20,
-			selector: 'balanceOf',
-		},
-		output: (returnParams) => {
-			console.log('Recipents balance is now: ', formatEther(returnParams[0]), ' DAI');
-		},
-	},
-];
-
-const provider = getDefaultProvider();
-const etherState = new EtherState(actions, provider);
+const program = Effect.gen(function* () {
+  const store = yield* pgliteStore(pglite)
+  const indexer = yield* Indexer.make({ client: evm, index: blocks, store })
+  return yield* indexer.sync()
+})
 ```
 
-# API
+The runtime fetches hash-pinned block inputs, transforms bootstrap windows concurrently, and commits blocks in chain order. A durable commit stores rows, canonical block metadata, and the checkpoint as one transaction. Restart validates the checkpoint against the canonical block at that number. A fork rolls back to a stored common ancestor and then replays. A conflict with the stored finalized anchor fails closed.
 
-- [EtherState](#EtherState)
-- [Triggers](#Triggers)
-- [Actions](#Actions)
-	- [BlockAction](#BlockAction)
-	- [EventAction](#EventAction)
-	- [TimeAction](#TimeAction)
+Run only one writer for each index ID. A version change with the same ID fails with `IndexMetadataMismatch`; migrate or remove the old index data before the new definition runs. Built-in adapters store encoded values in `ether_state_rows`, which applications can query through the database object that they supplied.
 
-## EtherState
+Storage integrations are structural adapters. The package does not import the database drivers at runtime:
 
+- `ether-state/indexer/pglite` accepts a PGlite object for memory, Node/Bun filesystem, IndexedDB, or another caller-selected PGlite filesystem.
+- `ether-state/indexer/libsql` accepts a local libSQL or remote Turso client.
+- `ether-state/indexer/d1` accepts a Cloudflare D1 binding and uses one `batch()` for each apply or rollback commit.
+- `callbackStore`, `indexChanges`, and `runIndexChanges` provide ordered apply and revert changes for a custom pipeline. Each change includes its checkpoint. Delivery is at least once unless the consumer stores that checkpoint atomically with its writes before it acknowledges the callback.
 
-Takes an array of `Actions` and manages calling contracts based on their triggers.
+See [the indexer example](examples/indexer/README.md).
 
-```ts
-import { EtherState, Action, TriggerType } from 'ether-state';
-import { getDefaultProvider } from 'ethers';
+D1 rejects a block if its commit exceeds the platform batch or statement limits. The runtime does not split a block because the rows and checkpoint must stay atomic.
 
-const provider = getDefaultProvider();
-const actions: Action[] = [];
+## Development
 
-// Create instance
-const etherState = new EtherState(actions, provider)
+Use Bun 1.3.3.
 
-// Manually trigger contract calls to all actions with BLOCK trigger
-etherState.update(TriggerType.BLOCK);
-
-// Destory instance, turn off all event listeners
-etherState.destroy();
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun test
+bun run check
+bun run test:live
 ```
 
-**Create new instance** -`new EtherState(actions: Action[], provider: Provider, options?: { customMulticallAddress?: string, populateTimeAndBlock?: boolean })`
+`bun test` runs unit and live RPC tests directly from source. It does not require a build.
+`bun run check` adds strict TypeScript checks, type-aware lint, a build, and a packed-package check for ESM, CommonJS, and declarations.
 
-**Manually Trigger Updates** - `EtherState.update(type: TriggerType.TIME | TriggerType.BLOCK)`
-Triggers update calls to all Actions with trigger types of either TIME or BLOCK.
+Live tests use real Ethereum RPCs and always run in CI. Public endpoints can time out or rate-limit requests; such failures fail the check. Set `RPC_HTTP_URL` to choose an endpoint. `bun run test:live` runs only the live test. CI uses one Bun job. There are no browser tests or Node-version matrices.
 
-**Stop Updates** = `EtherState.destroy()`
-Removes all event listeners and stops all updates
+TypeScript emits ESM and declarations. Bun builds the CommonJS entry point. The base tsconfig checks source and examples; the build config includes only source. The CommonJS entry requires a runtime that can load Effect's ESM dependency. Node and browser compatibility are not tested in CI.
 
-## Triggers
+The runtime dependency is Effect. Ethers, Viem, Anvil, PGlite, libSQL, Miniflare, and their type packages are development-only dependencies. npm is used only by the release workflow for publishing.
 
-There are 3 trigger types, `BLOCK`, `TIME` and `EVENT`.
+## Source layout
 
-Time actions are triggered by setInterval, set the interval amount in ms.
-Event actions are triggered by a matching ethers' [EventFilter](https://docs.ethers.org/v6/api/providers/#EventFilter), the Log from the event filter and block is passed to the `inputs` method of the action.
-
-```ts
-enum TriggerType {
-	BLOCK,
-	EVENT,
-	TIME,
-}
-
-type BlockTrigger = { type: TriggerType.BLOCK }
-type TimeTrigger = { type: TriggerType.TIME, interval: number }
-type EventTrigger = { type: TriggerType.EVENT, eventFilter: EventFilter }
+```text
+src/
+  index.ts
+  viem.ts            optional Viem Public Client transport
+  indexer.ts         indexing definitions and runtime
+  indexer-*.ts       storage adapter entry points
+  indexer/           indexing runtime and storage implementations
+  rpc/
+    client.ts       client setup and orchestration
+    schema.ts       RPC schemas and method types
+    chainList.ts    cached chain metadata
+    live.ts         block state and timing
+    watch.ts        log filters and call/state watches
+    history.ts      historical ranges and streams
+    query.ts        request deduplication and cache
+    multicall.ts    compatible contract-read batches
+    transport/
+      http.ts       HTTP requests and JSON-RPC batching
+      ws.ts         WS state, reconnects, and subscriptions
+      queue.ts      batching queue and endpoint budgets
 ```
 
-## Actions
+## Later
 
-There are 3 variation of `Action` for the 3 different trigger types.
-They all include trigger, input, call and output with type specific parameters for the input and output functions.
+- [Local state and simulation](https://github.com/0xjimmy/ether-state/issues/9)
 
-The `input` function returns an array of input parameters for a contract function call.
-The `output` function gets passed the return value of the contract call as well as trigger specific data like the Log of an event triggered action.
-The `call` object defines the interface and function name to be called and a function that returns the contract address:
-```ts
-type ContractCall = {
-	target: () => string
-	interface: Interface
-	selector: string
-}
-
-```
-
-**Variations of Actions**
-
-```ts
-type BlockAction = {
-	trigger: BlockTrigger
-	input: (blockNumber: bigint) => Array<bigint | BytesLike | string | boolean>
-	call: ContractCall
-	output: (returnValues: Result, blockNumber: bigint) => unknown
-}
-
-type TimeAction = {
-	trigger: TimeTrigger
-	input: (currentTime: number) => Array<bigint | BytesLike | string | boolean>
-	call: ContractCall
-	output: (returnValues: Result, blockNumber: bigint) => unknown
-}
-
-type EventAction = {
-	trigger: EventTrigger
-	input: (log: Log, blockNumber: bigint) => Array<bigint | BytesLike | string | boolean>
-	call: ContractCall
-	output: (returnValues: Result, blockNumber: bigint, log: Log) => unknown
-}
-
-```
+See [the release flow](docs/releases.md). Changes go through a PR to `main`; publishing is a separate `main` to `release` step.
