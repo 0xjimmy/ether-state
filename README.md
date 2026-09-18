@@ -113,7 +113,7 @@ Live tests use real Ethereum RPCs and always run in CI. Public endpoints can tim
 
 TypeScript emits ESM and declarations. Bun builds the CommonJS entry point. The base tsconfig checks source and examples; the build config includes only source. The CommonJS entry requires a runtime that can load Effect's ESM dependency. Node and browser compatibility are not tested in CI.
 
-Runtime dependencies are Effect and ethers. Viem, Anvil, PGlite, libSQL, Miniflare, and their type packages are development-only integration-test dependencies. npm is used only by the release workflow for publishing.
+The runtime dependency is Effect. Ethers, Viem, Anvil, PGlite, libSQL, Miniflare, and their type packages are development-only dependencies. npm is used only by the release workflow for publishing.
 
 ## Source layout
 

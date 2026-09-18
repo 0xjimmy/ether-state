@@ -5,6 +5,7 @@
     "moduleResolution": "Node16",
     "lib": [
       "ES2022",
+      "ESNext.Disposable",
       "DOM"
     ],
     "types": [

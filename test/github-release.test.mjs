@@ -4,7 +4,7 @@ import { ensureGitHubRelease, githubPackageManifest, registryVersion } from '../
 const sha = 'a'.repeat(40)
 
 test('GitHub package changes only name, repository and registry metadata', () => {
-  const pkg = { name: 'ether-state', version: '0.2.3', gitHead: sha, exports: { '.': './dist/index.js' }, dependencies: { ethers: '^6.17.0' }, publishConfig: { registry: 'https://registry.npmjs.org/' } }
+  const pkg = { name: 'ether-state', version: '0.2.3', gitHead: sha, exports: { '.': './dist/index.js' }, dependencies: { effect: '^4.0.0-rc.115' }, publishConfig: { registry: 'https://registry.npmjs.org/' } }
   const result = githubPackageManifest(pkg)
   assert.equal(result.name, '@0xjimmy/ether-state')
   assert.equal(result.publishConfig.registry, 'https://npm.pkg.github.com/')

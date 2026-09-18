@@ -1,16 +1,103 @@
 import { Effect, Exit, Schema } from "effect"
 import type { Scope } from "effect"
-import { Interface } from "ethers"
 import { BatchQueue } from "./transport/queue.js"
 import type { EvmClientError } from "./client.js"
 import type { RpcBlockReference, RpcTransactionRequest } from "./schema.js"
 
 const address = "0xcA11bde05977b3631167028862bE2a173976CA11"
-const abi = new Interface([
-	"function aggregate3((address target,bool allowFailure,bytes callData)[] calls) payable returns ((bool success,bytes returnData)[])",
-	"function getBlockNumber() view returns (uint256)",
-])
+const aggregate3Selector = "0x82ad56cb"
+const getBlockNumberSelector = "0x42cbb15c"
+const wordBytes = 32
+const maxWord = (1n << 256n) - 1n
 const Results = Schema.Array(Schema.Tuple([Schema.Boolean, Schema.String]))
+
+type AggregateCall = readonly [target: string, allowFailure: boolean, callData: string]
+
+const word = (value: bigint): string => {
+	if (value < 0n || value > maxWord) throw new Error("Invalid ABI word")
+	return value.toString(16).padStart(wordBytes * 2, "0")
+}
+
+const hex = (value: string): string => {
+	if (!/^0x(?:[\da-f]{2})*$/i.test(value)) throw new Error("Invalid hex data")
+	return value.slice(2).toLowerCase()
+}
+
+const encodeBytes = (value: string): string => {
+	const data = hex(value)
+	return word(BigInt(data.length / 2)) + data.padEnd(Math.ceil(data.length / (wordBytes * 2)) * wordBytes * 2, "0")
+}
+
+const encodeAddress = (value: string): string => {
+	if (!/^0x[\da-f]{40}$/i.test(value)) throw new Error("Invalid address")
+	return value.slice(2).toLowerCase().padStart(wordBytes * 2, "0")
+}
+
+const encodeAggregate3 = (calls: readonly AggregateCall[]): string => {
+	const tuples = calls.map(([target, allowFailure, callData]) =>
+		encodeAddress(target) + word(allowFailure ? 1n : 0n) + word(96n) + encodeBytes(callData))
+	let offset = BigInt(calls.length * wordBytes)
+	const offsets = tuples.map((tuple) => {
+		const current = word(offset)
+		offset += BigInt(tuple.length / 2)
+		return current
+	})
+	return aggregate3Selector + word(32n) + word(BigInt(calls.length)) + offsets.join("") + tuples.join("")
+}
+
+const bytes = (value: string): Uint8Array => {
+	const data = hex(value)
+	const result = new Uint8Array(data.length / 2)
+	for (let index = 0; index < result.length; index++) result[index] = Number.parseInt(data.slice(index * 2, index * 2 + 2), 16)
+	return result
+}
+
+const readWord = (data: Uint8Array, offset: number): bigint => {
+	if (!Number.isSafeInteger(offset) || offset < 0 || offset + wordBytes > data.length) throw new Error("Invalid ABI offset")
+	let value = 0n
+	for (let index = 0; index < wordBytes; index++) {
+		const byte = data[offset + index]
+		if (byte === undefined) throw new Error("Invalid ABI word")
+		value = (value << 8n) + BigInt(byte)
+	}
+	return value
+}
+
+const safeNumber = (value: bigint): number => {
+	if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("ABI value exceeds the safe integer range")
+	return Number(value)
+}
+
+const addOffset = (left: number, right: number): number => {
+	const value = left + right
+	if (!Number.isSafeInteger(value)) throw new Error("ABI offset exceeds the safe integer range")
+	return value
+}
+
+const readBytes = (data: Uint8Array, offset: number): string => {
+	const length = safeNumber(readWord(data, offset))
+	const start = addOffset(offset, wordBytes)
+	const end = addOffset(start, length)
+	if (end > data.length) throw new Error("Invalid ABI byte range")
+	return `0x${Array.from(data.slice(start, end), (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+}
+
+const decodeAggregate3 = (value: string): readonly (readonly [boolean, string])[] => {
+	const data = bytes(value)
+	const array = safeNumber(readWord(data, 0))
+	const length = safeNumber(readWord(data, array))
+	const heads = addOffset(array, wordBytes)
+	if (addOffset(heads, length * wordBytes) > data.length) throw new Error("Invalid ABI array")
+	const results: (readonly [boolean, string])[] = []
+	for (let index = 0; index < length; index++) {
+		const tuple = addOffset(heads, safeNumber(readWord(data, heads + index * wordBytes)))
+		const success = readWord(data, tuple)
+		if (success !== 0n && success !== 1n) throw new Error("Invalid ABI boolean")
+		const output = addOffset(tuple, safeNumber(readWord(data, tuple + wordBytes)))
+		results.push([success === 1n, readBytes(data, output)])
+	}
+	return results
+}
 
 export interface ContractReverted { readonly _tag: "ContractReverted"; readonly data: string }
 export interface InvalidMulticall { readonly _tag: "InvalidMulticall"; readonly message: string }
@@ -65,12 +152,12 @@ export class MulticallReads {
 			}
 			this.stats.batches++
 			this.stats.calls += calls.length
-			const data = abi.encodeFunctionData("aggregate3", [[
-				...calls.map((call) => [call.to, true, call.data ?? call.input ?? "0x"]),
-				[address, false, abi.encodeFunctionData("getBlockNumber")],
-			]])
+			const data = encodeAggregate3([
+				...calls.map((call): AggregateCall => [call.to ?? "", true, call.data ?? call.input ?? "0x"]),
+				[address, false, getBlockNumberSelector],
+			])
 			const raw = yield* this.options.fetch({ to: address, data }, block)
-			const decoded = yield* Effect.try({ try: (): unknown => abi.decodeFunctionResult("aggregate3", raw)[0],
+			const decoded = yield* Effect.try({ try: (): unknown => decodeAggregate3(raw),
 				catch: (): InvalidMulticall => ({ _tag: "InvalidMulticall", message: "Invalid aggregate return data" }) })
 			const results = yield* Schema.decodeUnknownEffect(Results)(decoded)
 			const metadata = results[calls.length]
