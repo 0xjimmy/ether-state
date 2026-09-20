@@ -1,6 +1,6 @@
 # ether-state
 
-An Effect-based client for reading and watching EVM data. This branch is work toward 0.3, not a release. The old `EtherState` API has been removed.
+An Effect-based client for reading and watching EVM data. The old `EtherState` API has been removed.
 
 ```ts
 import { EvmClient, getChainList, getChain, getRpcEndpoints, getExplorers } from "ether-state"
