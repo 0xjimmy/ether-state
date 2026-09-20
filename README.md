@@ -68,7 +68,8 @@ A requested historical call never silently changes its block reference.
 ### Request recovery and progress
 
 Idempotent reads, block polling, log fetching, and historical fetches use the same internal request policy.
-Each physical RPC read has at most two concurrent attempts, four attempts total, and a total `requestTimeout` budget.
+Each physical RPC read has at most two concurrent attempts and a total `requestTimeout` budget.
+The attempt limit is at least four and expands to cover the verified eligible endpoints. Untried endpoints take priority over repeated attempts.
 Endpoint queue time is part of that budget. A high-level operation can require several physical reads.
 Writes such as transaction submission do not use this retry policy.
 
@@ -76,7 +77,7 @@ The client ranks eligible endpoints by measured valid-response time, load, coold
 HTTP standbys can serve reads after a selected endpoint fails. Connected WebSocket endpoints remain a fallback for reads.
 Successful responses cancel losing attempts. Unsupported methods and log-range restrictions are remembered.
 HTTP batches learn reported item limits and split future batches. Rate limits reduce endpoint throughput, followed by gradual recovery. The affected method prefers other endpoints for 30 seconds, so one expensive method does not repeatedly exhaust the same provider.
-The request policy distinguishes retryable failures, endpoint rotation, unsupported methods, and permanent errors.
+Upstream HTTP errors, invalid responses, remote parameter rejections, and unknown provider errors retry or rotate before reaching a consumer. Rotated failures lower that endpoint's method priority for 60 seconds. Local request encoding errors and valid contract reverts remain terminal. If the deadline or attempt budget expires, the client returns the last typed failure.
 
 Head discovery runs independently of log catch-up:
 
@@ -191,3 +192,9 @@ src/
 - [Local state and simulation](https://github.com/0xjimmy/ether-state/issues/9)
 
 See [the release flow](docs/releases.md). Changes go through a PR to `main`; publishing is a separate `main` to `release` step.
+
+## Reusable indexers
+
+Use `Indexer.define` to define sources and projections once, then create instances for separate pools or plans. See [the interface reference](docs/reusable-indexer.md) and [the examples](examples/indexer/README.md).
+
+The examples cover live memory state, finite forward history, and persistent live candles with backward history. Reusable instances and EvmClient support `close()`. Their owning Effect scopes also close them automatically.

@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit, Option, Schema, Scope, Semaphore, Stream, SubscriptionRef } from "effect"
+import { makeLifetime, type Lifetime } from "../internal/lifetime.js"
 import { HttpClient } from "effect/unstable/http"
 import type { Socket } from "effect/unstable/socket"
 import { getRpcEndpoints, type ChainListError, type RpcEndpoints } from "./chainList.js"
@@ -14,6 +15,10 @@ import { RpcQueryCoordinator, rpcQueryKey, type RpcQueryCacheStats } from "./que
 import { getRpcMethod, type HttpRpcMethodName, type RpcBlock, type RpcMethodName, type RpcParams,
 	type RpcResult, type RpcTransaction, type RpcReceipt, type RpcLog, type RpcLogFilter } from "./schema.js"
 import { ethWsRpc, ethWsRpcOnce, ethWsWatchNewHeads, makeWsState, watchSubscription, type RpcWsError, type WsState } from "./transport/ws.js"
+
+const isUnfilteredLogRange = (method: string, filter: unknown): boolean => method === "eth_getLogs" &&
+	typeof filter === "object" && filter !== null && !("blockHash" in filter) &&
+	(!("address" in filter) || filter.address === undefined) && (!("topics" in filter) || filter.topics === undefined)
 
 export type RpcTransport = "http" | "ws"
 
@@ -526,13 +531,13 @@ export class EvmClient {
 	private readonly reads: MulticallReads
 	private readonly scheduler: RequestScheduler
 	private readonly callStreams = new Map<string, Stream.Stream<WatchedCall<string>, CallError | Schema.SchemaError>>()
-	private closed = false
 	private readonly responseTimes = new Map<string, number[]>()
 	private readonly requestStats = { reads: 0, attempts: 0, extraAttempts: 0 }
 
 	private constructor(
 		readonly config: ResolvedEvmClientConfig,
 		private readonly options: ClientOptions,
+		private readonly lifetime: Lifetime,
 		private readonly httpClient: HttpClient.HttpClient,
 		private readonly wsScope: Scope.Scope,
 		private readonly activeHttp: SubscriptionRef.SubscriptionRef<readonly ProbeSuccess[]>,
@@ -547,10 +552,10 @@ export class EvmClient {
 			maxCalldataBytes: options.multicallMaxCalldataBytes, capacity: options.maxQueuedRequests,
 			fetch: (transaction, block) => this.fetch({ method: "eth_call", params: [transaction, block] }),
 			code: (block) => this.fetch({ method: "eth_getCode", params: [multicallAddress, block] }) })
-		this.blocks = SubscriptionRef.changes(head).pipe(
+		this.blocks = lifetime.watch(SubscriptionRef.changes(head).pipe(
 			Stream.filter(Option.isSome),
 			Stream.map((value) => value.value),
-		)
+		))
 		this.history = new RpcHistory(this)
 		this.fullBlocks = this.completeHeads().pipe(Stream.mapEffect((head) => this.recoverLive(
 			this.fetchPhysical({ method: "eth_getBlockByHash", params: [head.hash ?? "0x", true] }, (block) => block !== null &&
@@ -566,124 +571,127 @@ export class EvmClient {
 		config: EvmClientConfig,
 	): Effect.Effect<EvmClient, EvmClientInitError, HttpClient.HttpClient | Scope.Scope | Socket.WebSocketConstructor> {
 		return Effect.gen(function* () {
-			const options = resolveOptions(config.options)
-			for (const [option, value] of Object.entries({ ...options, blockTime: config.network.blockTime })) {
-				if (value === undefined) continue
-				const minimum = option === "concurrentHttp" || option === "concurrentWs" || option === "queryCacheSize" ||
-					option === "batchWindow" || option === "httpBatchWindow" || option === "multicallWindow" || option === "hedgeDelay" ? 0 : 1
-				if (!Number.isSafeInteger(value) || value < minimum) {
-					return yield* Effect.fail<InvalidClientConfig>({ _tag: "InvalidClientConfig", option })
+			const lifetime = yield* makeLifetime
+			return yield* Effect.gen(function* () {
+				const options = resolveOptions(config.options)
+				for (const [option, value] of Object.entries({ ...options, blockTime: config.network.blockTime })) {
+					if (value === undefined) continue
+					const minimum = option === "concurrentHttp" || option === "concurrentWs" || option === "queryCacheSize" ||
+						option === "batchWindow" || option === "httpBatchWindow" || option === "multicallWindow" || option === "hedgeDelay" ? 0 : 1
+					if (!Number.isSafeInteger(value) || value < minimum) {
+						return yield* Effect.fail<InvalidClientConfig>({ _tag: "InvalidClientConfig", option })
+					}
 				}
-			}
-			if (options.concurrentHttp + options.concurrentWs === 0) {
-				return yield* Effect.fail<InvalidClientConfig>({ _tag: "InvalidClientConfig", option: "concurrentHttp/concurrentWs" })
-			}
-			const httpClient = yield* HttpClient.HttpClient
-			const endpoints = config.endpoints ?? (yield* getRpcEndpoints(config.network.chainId))
-			const httpEndpoints = [...new Set(endpoints.http)]
-			const wsEndpoints = [...new Set(endpoints.ws)]
-			const [httpResults, wsResults] = yield* Effect.all([
-				probeInitial({
-					endpoints: httpEndpoints,
-					batchSize: options.probeConcurrency, minimum: config.options?.concurrentHttp ?? 1,
-					transport: "http",
-					probe: (endpoint) => probeHttp({
+				if (options.concurrentHttp + options.concurrentWs === 0) {
+					return yield* Effect.fail<InvalidClientConfig>({ _tag: "InvalidClientConfig", option: "concurrentHttp/concurrentWs" })
+				}
+				const httpClient = yield* HttpClient.HttpClient
+				const endpoints = config.endpoints ?? (yield* getRpcEndpoints(config.network.chainId))
+				const httpEndpoints = [...new Set(endpoints.http)]
+				const wsEndpoints = [...new Set(endpoints.ws)]
+				const [httpResults, wsResults] = yield* Effect.all([
+					probeInitial({
+						endpoints: httpEndpoints,
+						batchSize: options.probeConcurrency, minimum: config.options?.concurrentHttp ?? 1,
+						transport: "http",
+						probe: (endpoint) => probeHttp({
+							endpoint,
+							expectedChainId: config.network.chainId,
+							httpClient,
+							requestTimeout: options.requestTimeout,
+						}),
+					}),
+					probeInitial({
+						endpoints: wsEndpoints,
+						batchSize: options.probeConcurrency, minimum: config.options?.concurrentWs ?? 1,
+						transport: "ws",
+						probe: (endpoint) => probeWs({
+							endpoint,
+							expectedChainId: config.network.chainId,
+							requestTimeout: options.requestTimeout,
+						}),
+					}),
+				], { concurrency: "unbounded" })
+				const selectedHttp = yield* requireSelection("http", httpResults, config.options?.concurrentHttp ??
+					Math.min(options.concurrentHttp, httpResults.filter((result) => result._tag === "Success").length))
+				const selectedWs = yield* requireSelection("ws", wsResults, config.options?.concurrentWs ??
+					Math.min(options.concurrentWs, wsResults.filter((result) => result._tag === "Success").length))
+				const activeUrls = new Set([...selectedHttp, ...selectedWs].map((probe) => probe.endpoint))
+				const endpointMap = new Map<string, EndpointState>()
+				for (const probe of [...httpResults, ...wsResults]) {
+					endpointMap.set(probe.endpoint, initialEndpointState(probe, activeUrls))
+				}
+				const endpointState = yield* SubscriptionRef.make<ReadonlyMap<string, EndpointState>>(endpointMap)
+				const initialHead = rankProbes([...selectedHttp, ...selectedWs])[0]
+				if (initialHead === undefined) return yield* Effect.fail<InsufficientHealthyEndpoints>({
+					_tag: "InsufficientHealthyEndpoints", transport: httpEndpoints.length > 0 ? "http" : "ws", required: 1, available: 0,
+				})
+				const head = yield* SubscriptionRef.make(Option.fromNullishOr(initialHead).pipe(
+					Option.map((probe) => toBlockHead(probe.block, probe, probe.observedAt)),
+				))
+				const refreshLock = yield* Semaphore.make(1)
+				const wsScope = yield* Scope.make()
+				yield* Effect.addFinalizer(() => Scope.close(wsScope, Exit.void))
+				const queries = yield* RpcQueryCoordinator.make({ capacity: options.queryCacheSize, scope: wsScope })
+				const initialWs = yield* Effect.forEach(selectedWs, (probe) => makeWsState({
+					endpoint: probe.endpoint, requestTimeout: options.requestTimeout,
+				}).pipe(Scope.provide(wsScope), Effect.map((state) => ({ probe, state }))))
+				const activeHttp = yield* SubscriptionRef.make(selectedHttp)
+				const activeWs = yield* SubscriptionRef.make<readonly ActiveWs[]>(initialWs)
+				const blockTime = config.network.blockTime ?? (yield* estimateBlockTime({
+					latest: initialHead.block,
+					fetchBlock: (number) => Effect.firstSuccessOf([
+						...selectedHttp.map((probe) => timeoutRequest({
+							source: probe, method: "eth_getBlockByNumber", timeout: options.requestTimeout,
+							effect: ethHttpRpc({ endpoint: probe.endpoint, method: "eth_getBlockByNumber", inputParams: [number, false] }),
+						})),
+						...initialWs.map(({ state }) => state.request({ method: "eth_getBlockByNumber", inputParams: [number, false] })),
+					].map((request: Effect.Effect<RpcBlock | null, EvmClientError, HttpClient.HttpClient>) => request.pipe(Effect.flatMap((block) => block?.number === number
+						? Effect.succeed(block) : Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" }))))),
+				}))
+				const client = new EvmClient(
+					{ ...config, endpoints, network: { ...config.network, blockTime } },
+					options,
+					lifetime,
+					httpClient,
+					wsScope,
+					activeHttp,
+					activeWs,
+					head,
+					endpointState,
+					refreshLock,
+					queries,
+				)
+				client.fullBlocks = yield* Stream.share(client.fullBlocks, { capacity: 16, replay: 1 })
+				client.receiptBlocks = yield* Stream.share(client.fullBlocks.pipe(
+					Stream.mapEffect((update) => client.recoverLive(client.fetchBlockReceipts(update.block).pipe(
+						Effect.map((receipts) => ({ ...update, receipts, logs: receipts.flatMap((receipt) => receipt.logs) })))), { concurrency: 8 }),
+				), { capacity: 16, replay: 1 })
+				client.logBlocks = yield* Stream.share(client.liveLogBatches().pipe(
+					Stream.tap((batch) => Effect.sync(() => { client.logProgress = { block: batch.block.number, at: Date.now(), error: null } })),
+				), { capacity: 16, replay: 1 })
+				yield* client.startBlockWatchers()
+				yield* Effect.forkScoped(client.probeRemainder(
+					"http",
+					httpEndpoints.slice(options.concurrentHttp === 0 ? httpEndpoints.length : httpResults.length),
+					(endpoint) => probeHttp({
 						endpoint,
 						expectedChainId: config.network.chainId,
 						httpClient,
 						requestTimeout: options.requestTimeout,
 					}),
-				}),
-				probeInitial({
-					endpoints: wsEndpoints,
-					batchSize: options.probeConcurrency, minimum: config.options?.concurrentWs ?? 1,
-					transport: "ws",
-					probe: (endpoint) => probeWs({
+				))
+				yield* Effect.forkScoped(client.probeRemainder(
+					"ws",
+					wsEndpoints.slice(options.concurrentWs === 0 ? wsEndpoints.length : wsResults.length),
+					(endpoint) => probeWs({
 						endpoint,
 						expectedChainId: config.network.chainId,
 						requestTimeout: options.requestTimeout,
 					}),
-				}),
-			], { concurrency: "unbounded" })
-			const selectedHttp = yield* requireSelection("http", httpResults, config.options?.concurrentHttp ??
-				Math.min(options.concurrentHttp, httpResults.filter((result) => result._tag === "Success").length))
-			const selectedWs = yield* requireSelection("ws", wsResults, config.options?.concurrentWs ??
-				Math.min(options.concurrentWs, wsResults.filter((result) => result._tag === "Success").length))
-			const activeUrls = new Set([...selectedHttp, ...selectedWs].map((probe) => probe.endpoint))
-			const endpointMap = new Map<string, EndpointState>()
-			for (const probe of [...httpResults, ...wsResults]) {
-				endpointMap.set(probe.endpoint, initialEndpointState(probe, activeUrls))
-			}
-			const endpointState = yield* SubscriptionRef.make<ReadonlyMap<string, EndpointState>>(endpointMap)
-			const initialHead = rankProbes([...selectedHttp, ...selectedWs])[0]
-			if (initialHead === undefined) return yield* Effect.fail<InsufficientHealthyEndpoints>({
-				_tag: "InsufficientHealthyEndpoints", transport: httpEndpoints.length > 0 ? "http" : "ws", required: 1, available: 0,
-			})
-			const head = yield* SubscriptionRef.make(Option.fromNullishOr(initialHead).pipe(
-				Option.map((probe) => toBlockHead(probe.block, probe, probe.observedAt)),
-			))
-			const refreshLock = yield* Semaphore.make(1)
-			const wsScope = yield* Scope.make()
-			yield* Effect.addFinalizer(() => Scope.close(wsScope, Exit.void))
-			const queries = yield* RpcQueryCoordinator.make({ capacity: options.queryCacheSize, scope: wsScope })
-			const initialWs = yield* Effect.forEach(selectedWs, (probe) => makeWsState({
-				endpoint: probe.endpoint, requestTimeout: options.requestTimeout,
-			}).pipe(Scope.provide(wsScope), Effect.map((state) => ({ probe, state }))))
-			const activeHttp = yield* SubscriptionRef.make(selectedHttp)
-			const activeWs = yield* SubscriptionRef.make<readonly ActiveWs[]>(initialWs)
-			const blockTime = config.network.blockTime ?? (yield* estimateBlockTime({
-				latest: initialHead.block,
-				fetchBlock: (number) => Effect.firstSuccessOf([
-					...selectedHttp.map((probe) => timeoutRequest({
-						source: probe, method: "eth_getBlockByNumber", timeout: options.requestTimeout,
-						effect: ethHttpRpc({ endpoint: probe.endpoint, method: "eth_getBlockByNumber", inputParams: [number, false] }),
-					})),
-					...initialWs.map(({ state }) => state.request({ method: "eth_getBlockByNumber", inputParams: [number, false] })),
-				].map((request: Effect.Effect<RpcBlock | null, EvmClientError, HttpClient.HttpClient>) => request.pipe(Effect.flatMap((block) => block?.number === number
-					? Effect.succeed(block) : Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" }))))),
-			}))
-			const client = new EvmClient(
-				{ ...config, endpoints, network: { ...config.network, blockTime } },
-				options,
-				httpClient,
-				wsScope,
-				activeHttp,
-				activeWs,
-				head,
-				endpointState,
-				refreshLock,
-				queries,
-			)
-			yield* Effect.addFinalizer(() => Effect.sync(() => { client.closed = true }))
-			client.fullBlocks = yield* Stream.share(client.fullBlocks, { capacity: 16, replay: 1 })
-			client.receiptBlocks = yield* Stream.share(client.fullBlocks.pipe(
-				Stream.mapEffect((update) => client.recoverLive(client.fetchBlockReceipts(update.block).pipe(
-					Effect.map((receipts) => ({ ...update, receipts, logs: receipts.flatMap((receipt) => receipt.logs) })))), { concurrency: 8 }),
-			), { capacity: 16, replay: 1 })
-			client.logBlocks = yield* Stream.share(client.liveLogBatches().pipe(
-				Stream.tap((batch) => Effect.sync(() => { client.logProgress = { block: batch.block.number, at: Date.now(), error: null } })),
-			), { capacity: 16, replay: 1 })
-			yield* client.startBlockWatchers()
-			yield* Effect.forkScoped(client.probeRemainder(
-				"http",
-				httpEndpoints.slice(options.concurrentHttp === 0 ? httpEndpoints.length : httpResults.length),
-				(endpoint) => probeHttp({
-					endpoint,
-					expectedChainId: config.network.chainId,
-					httpClient,
-					requestTimeout: options.requestTimeout,
-				}),
-			))
-			yield* Effect.forkScoped(client.probeRemainder(
-				"ws",
-				wsEndpoints.slice(options.concurrentWs === 0 ? wsEndpoints.length : wsResults.length),
-				(endpoint) => probeWs({
-					endpoint,
-					expectedChainId: config.network.chainId,
-					requestTimeout: options.requestTimeout,
-				}),
-			))
-			return client
+				))
+				return client
+			}).pipe(Scope.provide(lifetime.scope), Effect.onExit((exit) => Exit.isFailure(exit) ? lifetime.close : Effect.void))
 		})
 	}
 
@@ -692,7 +700,12 @@ export class EvmClient {
 	}
 
 	get isClosed(): boolean {
-		return this.closed
+		return this.lifetime.isClosed
+	}
+
+	/** Stop workers and requests, close sockets, and wait for cleanup. Idempotent. */
+	close(): Effect.Effect<void> {
+		return this.lifetime.close
 	}
 
 	get queryCache(): Effect.Effect<RpcQueryCacheStats> {
@@ -713,7 +726,7 @@ export class EvmClient {
 	}
 
 	call(read: ContractRead): Effect.Effect<string, CallError> {
-		return Effect.gen({ self: this }, function* () {
+		return this.lifetime.run(Effect.gen({ self: this }, function* () {
 			const reference = read.block ?? "latest"
 			if (reference === "pending") return yield* this.fetch({ method: "eth_call", params: [read.transaction, reference] })
 			const hashReference = typeof reference === "object" && "blockHash" in reference ? reference.blockHash
@@ -754,7 +767,7 @@ export class EvmClient {
 			const block = hash === null ? number : { blockHash: hash, requireCanonical: true }
 			yield* Schema.encodeEffect(getRpcMethod("eth_call").request)({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [read.transaction, block] })
 			return yield* this.reads.request({ ...read, block, blockNumber: number })
-		})
+		}))
 	}
 
 	watchLogs(filter: RpcLogFilter = {}): Stream.Stream<RpcLog> {
@@ -762,18 +775,18 @@ export class EvmClient {
 	}
 
 	watchLogBlocks(filter: RpcLogFilter = {}): Stream.Stream<BlockLogBatch> {
-		return this.logBlocks.pipe(Stream.map((batch) => ({ ...batch, logs: batch.logs.filter((log) => matchesLog(log, filter)) })))
+		return this.lifetime.watch(this.logBlocks.pipe(Stream.map((batch) => ({ ...batch, logs: batch.logs.filter((log) => matchesLog(log, filter)) }))))
 	}
 
 	watchTransactions(filter: { readonly from?: string; readonly to?: string } = {}): Stream.Stream<RpcTransaction> {
-		return this.fullBlocks.pipe(Stream.map((head) => head.block.transactions.filter((tx) =>
+		return this.lifetime.watch(this.fullBlocks.pipe(Stream.map((head) => head.block.transactions.filter((tx) =>
 			(filter.from === undefined || tx.from.toLowerCase() === filter.from.toLowerCase()) &&
-			(filter.to === undefined || tx.to?.toLowerCase() === filter.to.toLowerCase()))), Stream.flattenIterable)
+			(filter.to === undefined || tx.to?.toLowerCase() === filter.to.toLowerCase()))), Stream.flattenIterable))
 	}
 
 	watchCall<A>(options: WatchCallOptions<A>): Stream.Stream<WatchedCall<A>, CallError | Schema.SchemaError> {
 		const key = JSON.stringify(options.transaction, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value) + String(options.multicall)
-		return Stream.unwrap(Effect.gen({ self: this }, function* () {
+		return this.lifetime.watch(Stream.unwrap(Effect.gen({ self: this }, function* () {
 			let shared = this.callStreams.get(key)
 			if (shared === undefined) {
 				shared = yield* callChanges(this, { transaction: options.transaction, ...(options.multicall === undefined ? {} : { multicall: options.multicall }),
@@ -782,30 +795,35 @@ export class EvmClient {
 			}
 			return shared.pipe(Stream.mapEffect((entry) => options.decode(entry.value).pipe(Effect.map((value) => ({ ...entry, value })))),
 				Stream.changesWith((a, b) => options.equals?.(a.value, b.value) ?? false))
-		}))
+		})))
 	}
 
 	watchState<A>(options: WatchCallOptions<A>): Effect.Effect<{ readonly current: Effect.Effect<WatchedState<A>>; readonly changes: Stream.Stream<WatchedState<A>> }, never, Scope.Scope> {
-		return makeWatchedState(this, options)
-	}
-
-	subscribe<A, I>(options: { readonly params: RpcParams<"eth_subscribe">; readonly schema: Schema.Codec<A, I> }): Stream.Stream<A, RpcWsError> {
-		return SubscriptionRef.changes(this.activeWs).pipe(Stream.switchMap((active) => {
-			const first = active[0]
-			return first === undefined ? Stream.fail({ _tag: "RpcError", code: -32004, message: "No active WS endpoint" } as const)
-				: watchSubscription(first.state, options.params, options.schema).pipe(Stream.map((notification) => notification.value))
+		return this.lifetime.run(Effect.gen({ self: this }, function* () {
+			const scope = yield* Scope.fork(this.lifetime.scope)
+			yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+			const state = yield* makeWatchedState(this, options).pipe(Scope.provide(scope))
+			return { ...state, changes: this.lifetime.watch(state.changes) }
 		}))
 	}
 
+	subscribe<A, I>(options: { readonly params: RpcParams<"eth_subscribe">; readonly schema: Schema.Codec<A, I> }): Stream.Stream<A, RpcWsError> {
+		return this.lifetime.watch(SubscriptionRef.changes(this.activeWs).pipe(Stream.switchMap((active) => {
+			const first = active[0]
+			return first === undefined ? Stream.fail({ _tag: "RpcError", code: -32004, message: "No active WS endpoint" } as const)
+				: watchSubscription(first.state, options.params, options.schema).pipe(Stream.map((notification) => notification.value))
+		})))
+	}
+
 	sendRawTransaction(raw: string): Effect.Effect<string, EvmClientError> {
-		return Effect.gen({ self: this }, function* () {
+		return this.lifetime.run(Effect.gen({ self: this }, function* () {
 			yield* Schema.encodeEffect(getRpcMethod("eth_sendRawTransaction").request)({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] })
 			const sources = [...(yield* this.endpoints).values()].filter((endpoint) => endpoint.status._tag === "Selected")
 			if (sources.length === 0) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
 			const results = yield* Effect.forEach(sources, (source) => Effect.exit(this.requestAt(source, { method: "eth_sendRawTransaction", params: [raw] })), { concurrency: "unbounded" })
 			for (const result of results) if (Exit.isSuccess(result)) return result.value
 			return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
-		})
+		}))
 	}
 
 	fetchOne<Method extends HedgeableRpcMethodName>(request: { readonly method: Method; readonly params: RpcParams<Method> }): Effect.Effect<RpcResult<Method>, EvmClientError> {
@@ -817,7 +835,7 @@ export class EvmClient {
 	watchBlocks(options?: { readonly full?: false }): Stream.Stream<BlockHead>
 	watchBlocks(options: { readonly full: boolean; readonly logs?: boolean }): Stream.Stream<BlockHead | FullBlockUpdate | ReceiptBlockUpdate>
 	watchBlocks(options: { readonly full?: boolean; readonly logs?: boolean } = {}): Stream.Stream<BlockHead | FullBlockUpdate | ReceiptBlockUpdate> {
-		return options.logs ? this.receiptBlocks : options.full ? this.fullBlocks : this.blocks
+		return this.lifetime.watch(options.logs ? this.receiptBlocks : options.full ? this.fullBlocks : this.blocks)
 	}
 
 	private recoverLive<A>(effect: Effect.Effect<A, EvmClientError>): Effect.Effect<A> {
@@ -1107,13 +1125,13 @@ export class EvmClient {
 		readonly params: RpcParams<Method>
 	}): Effect.Effect<RpcResult<Method>, EvmClientError> {
 		const definition = getRpcMethod(request.method)
-		return Schema.encodeEffect(definition.request)({
+		return this.lifetime.run(Schema.encodeEffect(definition.request)({
 			jsonrpc: "2.0", id: 1, method: request.method, params: request.params,
 		}).pipe(Effect.flatMap((encoded) => this.queries.get({
 			key: rpcQueryKey({ chainId: this.config.network.chainId, method: request.method, params: encoded.params }),
 			result: definition.result, load: this.fetchPhysical(request),
 			keep: (result) => keepCompletedResult(request, result),
-		})))
+		}))))
 	}
 
 	private fetchPhysical<Method extends HedgeableRpcMethodName>(request: {
@@ -1122,18 +1140,25 @@ export class EvmClient {
 	}, accept: (result: RpcResult<Method>) => boolean = () => true, policy?: { readonly hedgeInterval?: number; readonly deadline?: number }): Effect.Effect<RpcResult<Method>, EvmClientError> {
 		return Effect.suspend(() => {
 			let attempts = 0
+			let maxAttempts = 4
 			let stopped = false
 			let lastError: EvmClientError = { _tag: "RpcError", code: -32601, message: `No capable endpoint for ${request.method}` }
 			const tried = new Set<string>()
 			const excluded = new Set<string>()
 			const busy = new Set<string>()
 			const lane: Effect.Effect<RpcResult<Method>, EvmClientError> = Effect.gen({ self: this }, function* () {
-				while (!stopped && attempts < 4) {
-					const endpoints = [...(yield* this.endpoints).values()].filter((source) =>
+				while (!stopped) {
+					const candidates = [...(yield* this.endpoints).values()].filter((source) =>
 						(source.status._tag === "Selected" || source.status._tag === "Standby") &&
 						(source.transport === "http" || source.status._tag === "Selected") &&
 						!source.unsupportedMethods?.includes(request.method) &&
-						!(source.unsupportedLogRanges && request.method === "eth_getLogs" && typeof request.params[0] === "object" && !("blockHash" in request.params[0])) && !excluded.has(source.endpoint) && !busy.has(source.endpoint))
+						!(source.unsupportedLogRanges && isUnfilteredLogRange(request.method, request.params[0])))
+					// Do not exhaust four attempts while a verified peer remains untried.
+					maxAttempts = Math.max(maxAttempts, new Set([...candidates.map((source) => source.endpoint), ...excluded]).size)
+					if (attempts >= maxAttempts) break
+					const available = candidates.filter((source) => !excluded.has(source.endpoint) && !busy.has(source.endpoint))
+					const untried = available.filter((source) => !tried.has(source.endpoint))
+					const endpoints = untried.length > 0 ? untried : available
 					const score = (source: EndpointState): number => {
 						const recent = this.responseTimes.get(source.endpoint + request.method) ?? []
 						const latency = recent.reduce((sum, item) => sum + item, 0) / (recent.length || 1)
@@ -1171,7 +1196,7 @@ export class EvmClient {
 	}
 
 	getBlock(): Effect.Effect<BlockHead, EvmClientError> {
-		return this.refreshLock.withPermit(SubscriptionRef.get(this.head).pipe(Effect.flatMap((cached) => {
+		return this.lifetime.run(this.refreshLock.withPermit(SubscriptionRef.get(this.head).pipe(Effect.flatMap((cached) => {
 			if (Option.isSome(cached) && cached.value.timestamp !== null &&
 				Date.now() - cached.value.observedAt <= this.config.network.blockTime) {
 				return Effect.succeed(cached.value)
@@ -1185,7 +1210,7 @@ export class EvmClient {
 					? Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
 					: Effect.succeed(current.value)),
 			)
-		})))
+		}))))
 	}
 
 	private requestAt<Method extends HttpRpcMethodName>(source: EndpointSource, request: {
@@ -1210,6 +1235,9 @@ export class EvmClient {
 			Effect.map(({ result }) => result),
 			Effect.tapError((error) => Effect.sync(() => {
 				let delay = 0
+				if (readFailurePolicy(error) === "rotate") {
+					this.methodRetryAt.set(source.endpoint + request.method, Date.now() + 60_000)
+				}
 				if (error._tag === "HttpClientError" && error.response?.status === 429) {
 					const retryAfter = error.response.headers["retry-after"] ?? "1"
 					const seconds = Number(retryAfter)
@@ -1225,8 +1253,7 @@ export class EvmClient {
 					this.retryAt.set(source.endpoint, Math.max(this.retryAt.get(source.endpoint) ?? 0, Date.now() + delay))
 				}
 			})),
-			Effect.tapError((error) => request.method === "eth_getLogs" && typeof request.params[0] === "object" &&
-				!("blockHash" in request.params[0]) && error._tag === "RpcError" && /specify an address|archive requests|range.*(unsupported|not supported)/i.test(error.message)
+			Effect.tapError((error) => isUnfilteredLogRange(request.method, request.params[0]) && error._tag === "RpcError" && /specify an address|archive requests|range.*(unsupported|not supported)/i.test(error.message)
 				? SubscriptionRef.update(this.endpointState, (endpoints) => {
 					const endpoint = endpoints.get(source.endpoint)
 					return endpoint === undefined ? endpoints : new Map(endpoints).set(source.endpoint, { ...endpoint, unsupportedLogRanges: true })

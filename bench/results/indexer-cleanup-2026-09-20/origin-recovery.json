@@ -1,0 +1,16 @@
+{
+  "chainId": "4663",
+  "pool": "0x52e65B17fB6E5BA00Ed806f37Afcd2DaA50271Ca",
+  "configuration": "library-tests/src/rpc.ts ROBINHOOD_CONFIG",
+  "before": {
+    "error": "HttpClientError",
+    "httpStatus": 403,
+    "endpoint": "https://robinhood.rpc.blxrbdn.com/",
+    "effect": "Creation lookup failed without completing upstream fallback"
+  },
+  "after": {
+    "blockNumber": "1506281",
+    "blockHash": "0x452f1288e38c01878ee138d99b9144c81cdb4f01d2b2fe2a6f5f74e2db74c62f",
+    "result": "Creation event verified against canonical block"
+  }
+}

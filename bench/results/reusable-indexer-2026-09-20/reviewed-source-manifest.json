@@ -1,0 +1,9 @@
+{
+  "../ether-state/src/indexer/model-pglite.ts": "18267e95f2783fc3504b3ef15114766627aeebc7fd28272840349a567168b907",
+  "../ether-state/src/indexer/model-definition.ts": "ff05827f5ed7cb86ed5e552d81c3ed1fdf3344230576c6b32445ea8c34b86e91",
+  "../ether-state/src/indexer/model.ts": "169b764ee063f78191aeed84290764fa9162833c9a65b90210f1e683802daf49",
+  "../ether-state/src/indexer/model-store.ts": "19e76a39036f60061011adbfd2b0f0607ca8fe53b97984e3d4e50d2cde887a99",
+  "../ether-state/examples/indexer/pool-definition.ts": "c75586aaa6ea0fb60a358d43c47c035296c8726419b0bcca8d124ad6b8f27f6a",
+  "src/pool-tracker.ts": "7bb7855a97e1a11d93f17c05b7e402b0a60fb71c590a5c90181122bccc1b43c8",
+  "scripts/trace-pools.mjs": "94e2ddd2169427e643422ea4137fb14325bc844c328c2e4641cfa63dfc78ebb3"
+}

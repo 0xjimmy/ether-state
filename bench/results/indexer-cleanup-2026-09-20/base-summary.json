@@ -1,0 +1,1067 @@
+{
+  "chain": "base",
+  "chainId": "8453",
+  "pool": "0x6c561B446416E1A00E8E93E221854d6eA4171372",
+  "runId": "2026-09-20T07-12-37.181Z",
+  "measuredMs": 60002.402925,
+  "startupMs": 5222.287113,
+  "lag": {
+    "first": 1,
+    "last": 1,
+    "median": 0,
+    "p95": 1,
+    "maximum": 1,
+    "trendBlocksPerSecond": -0.0035351149207538996
+  },
+  "requestedLiveMs": 60000,
+  "startedLive": true,
+  "snapshots": 63,
+  "distinctBlocks": 31,
+  "sourceCounts": {
+    "bootstrap": 1,
+    "events": 31,
+    "slot0": 31,
+    "depth": 0
+  },
+  "applyP50Ms": 0.20819499999925029,
+  "applyP95Ms": 0.33856000000378117,
+  "blockTimestampAgeP50Ms": 731,
+  "blockTimestampAgeP95Ms": 1046,
+  "progress": {
+    "logs": "51549537",
+    "slot0": "51549537",
+    "logBatches": 31,
+    "gaps": 0
+  },
+  "indexStatus": {
+    "live": "following",
+    "head": {
+      "number": "51549537",
+      "hash": "0xbdea11f7d605eab978ff4cd7b6f607cd627925c1931c2c8a4664fa6b153405f5",
+      "parentHash": "0x2ad7d827aa0c23d6624538ef0f73d050bc8bd49b0f150f15f615a5f09ab37090",
+      "timestamp": "1789888421",
+      "logsBloom": "0x907579c2a5f9d97ce6c97f8de7ca992970dfc669f6ec1f1b3dac12437c3f641a0d6cb466983ca0908d56f4fbe2a73d52eadd748ff5c16e2e967ea6d3e0bf35e9f4707ad380d54cffb3f7d52e479d3b2f5eee631b1edd9af8a66ae985bd7e7bd4bce0ccb8badf1b041316c0139446287d97ebbf02efdc16b6fec1ec3ea65e4c71f5715e0fada4dc71ebcf9ff3dd5bccfa7ca7b3ebcc6dd4d970ea9c6497a4306ea366dfe4879975fe67751552dad69362f274edd337d9e97ec1df0bab6d16779e7a7ca1fb61cfad713cbf5f374c30999b4c2af46f966e17fad8d847c38f7ce69d233e3d8754a71b563ae497cd5d571fa7a5d674a8553f7ec2f7887ce323bf3fe4"
+    },
+    "applied": {
+      "number": "51549537",
+      "hash": "0xbdea11f7d605eab978ff4cd7b6f607cd627925c1931c2c8a4664fa6b153405f5",
+      "parentHash": "0x2ad7d827aa0c23d6624538ef0f73d050bc8bd49b0f150f15f615a5f09ab37090",
+      "timestamp": "1789888421"
+    },
+    "history": "complete",
+    "coverage": [
+      {
+        "from": "51549406",
+        "through": "51549537"
+      }
+    ],
+    "error": null
+  },
+  "candleUpdates": 47,
+  "appErrors": [],
+  "exit": "success",
+  "rpcEnvelopes": 404,
+  "cancelled": 45,
+  "rpcErrors": [],
+  "rpcEndpoints": [
+    {
+      "endpoint": "https://base-rpc.publicnode.com",
+      "p50Ms": 156.71850099999938,
+      "p95Ms": 560.3408770000024,
+      "responses": 334
+    },
+    {
+      "endpoint": "https://mainnet.base.org",
+      "p50Ms": 255.19594100000177,
+      "p95Ms": 878.3851169999998,
+      "responses": 25
+    }
+  ],
+  "heartbeat": [
+    {
+      "progress": {
+        "logs": "51549509",
+        "slot0": "51549510",
+        "logBatches": 3,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549510",
+          "hash": "0x1831f37172350f886e79c8ec33caba72b500de9dd75350a63a3ebbfae3d58f6f",
+          "parentHash": "0x6f03ba667f42a78f539ba9e6944c642ba7cba54a3f67c1689c753957821eb0db",
+          "timestamp": "1789888367"
+        },
+        "applied": {
+          "number": "51549509",
+          "hash": "0x6f03ba667f42a78f539ba9e6944c642ba7cba54a3f67c1689c753957821eb0db",
+          "parentHash": "0xf77ec27e190a7b573c542db2b279f1ecb88e956227b69bdab02b99c857a49d08",
+          "timestamp": "1789888365"
+        },
+        "history": "backfilling",
+        "coverage": [
+          {
+            "from": "51549492",
+            "through": "51549509"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "1",
+      "elapsedMs": 5465.704521,
+      "endpointHead": "51549510",
+      "currentBlock": "51549510",
+      "latestEvents": "51549509",
+      "latestSlot0": "51549510",
+      "currentLag": "0",
+      "eventLag": "1",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 414,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 5,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 75,
+          "attempts": 89,
+          "extraAttempts": 14
+        },
+        "streams": {
+          "head": "51549510",
+          "logs": "51549509",
+          "logLag": "1",
+          "status": "live",
+          "lastLogAt": 1789888365856,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549512",
+        "slot0": "51549512",
+        "logBatches": 6,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549512",
+          "hash": "0x9ca4be9d9f4b4cd55b6fc80717784201294dee02214fc4196cbf8c3949b930fc",
+          "parentHash": "0xa4ef6ff233b5ab50c1f13838dcc334c824274218de6a400a56378c75e427be3e",
+          "timestamp": "1789888371",
+          "logsBloom": "0x6e373f100fa85094008037e8c209903259730460e1cd5002181d9348ab440811352806541494fd896712c49fc0013611663c4406c591232486f3efd6527e19261745ee5c26944dd872b5550a0309222c70f6a650565cdaf0948a6843c574b01060b968b3cb1dc9d6300401b10d862cd485a95c224c4726208ec09532d04aee19977177593bc0c02668ca1232dd140849696fb7812c64c83a28022c5605b4354b066426b0fde51f6e52c1d53297239583f7c0cc130099214cdb53433f5701c092411e146a48c9ac7f2905cfa60135d481d458c47ed7b66296216906d2101dec2220ddec65252e5c043940e024980617ef8d0fbe20059b34431718e04e01263a2c"
+        },
+        "applied": {
+          "number": "51549512",
+          "hash": "0x9ca4be9d9f4b4cd55b6fc80717784201294dee02214fc4196cbf8c3949b930fc",
+          "parentHash": "0xa4ef6ff233b5ab50c1f13838dcc334c824274218de6a400a56378c75e427be3e",
+          "timestamp": "1789888371"
+        },
+        "history": "backfilling",
+        "coverage": [
+          {
+            "from": "51549468",
+            "through": "51549512"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 10680.11499,
+      "endpointHead": "51549512",
+      "currentBlock": "51549512",
+      "latestEvents": "51549512",
+      "latestSlot0": "51549512",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 1323,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 7,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 134,
+          "attempts": 150,
+          "extraAttempts": 16
+        },
+        "streams": {
+          "head": "51549512",
+          "logs": "51549512",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888371761,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549515",
+        "slot0": "51549515",
+        "logBatches": 9,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549515",
+          "hash": "0x66fffc19cf3c726389086d800342bc186bb8395aeddccfcd31bd1e3bba637cfd",
+          "parentHash": "0x9f9536d3878093fb7ec3f26f83f826546e8e43f34479106b18b8702760e9fd4a",
+          "timestamp": "1789888377",
+          "logsBloom": "0x97372d554425d1a4a201bc19c2081e21f177500ae3ec300b388cba618e15088319aa2ceb1037363c675788bd81067e90ca1f9d0698b06d6f97ba06db42b67107545072f414d74ddc9295bc1ac1ed616c7c6ba517da6dd23d00ca4018b160d08e6999cdfb5e4fd0e417240411aac33b2335ea3e12091fb6049ac6df36b74b2b51cd5537582ba05a017e9abef2dfdcc34877a5f2c348e4d14c388a8c4605a014cd12462d209fca14a940510128c202d6c0ffb93cc3420b7c7ed1cf13335e0cc0f2a45cc2fb4c4b8d717813df458276c39344fd844696ae0d9a599005d30818f486f05c89c6441714683ee4050ee9c316aeaf873492d4d370623548cccfb22a2a05"
+        },
+        "applied": {
+          "number": "51549515",
+          "hash": "0x66fffc19cf3c726389086d800342bc186bb8395aeddccfcd31bd1e3bba637cfd",
+          "parentHash": "0x9f9536d3878093fb7ec3f26f83f826546e8e43f34479106b18b8702760e9fd4a",
+          "timestamp": "1789888377"
+        },
+        "history": "backfilling",
+        "coverage": [
+          {
+            "from": "51549444",
+            "through": "51549515"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 15829.488612,
+      "endpointHead": "51549515",
+      "currentBlock": "51549515",
+      "latestEvents": "51549515",
+      "latestSlot0": "51549515",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 392,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 10,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 190,
+          "attempts": 213,
+          "extraAttempts": 23
+        },
+        "streams": {
+          "head": "51549515",
+          "logs": "51549515",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888377842,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549517",
+        "slot0": "51549517",
+        "logBatches": 11,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549518",
+          "hash": "0xd900f539d9ef1780a67f7803d178ad79d8f17afbaa59fea58fc9cd005ce4372e",
+          "parentHash": "0xebeabbdcb16e2c6d969b5b5aaba3c959cc3a8ccb4c6a59ab245896af95fc9aaf",
+          "timestamp": "1789888383"
+        },
+        "applied": {
+          "number": "51549517",
+          "hash": "0xebeabbdcb16e2c6d969b5b5aaba3c959cc3a8ccb4c6a59ab245896af95fc9aaf",
+          "parentHash": "0x2ae0576e4518e45e64ebb882e6dfe96c78f5b9626e9e448fc843d0e46ad8eda6",
+          "timestamp": "1789888381"
+        },
+        "history": "backfilling",
+        "coverage": [
+          {
+            "from": "51549420",
+            "through": "51549517"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "1",
+      "elapsedMs": 20991.867044,
+      "endpointHead": "51549518",
+      "currentBlock": "51549517",
+      "latestEvents": "51549517",
+      "latestSlot0": "51549517",
+      "currentLag": "1",
+      "eventLag": "1",
+      "slot0Lag": "1",
+      "snapshotAgeMs": 1633,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 13,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 247,
+          "attempts": 275,
+          "extraAttempts": 28
+        },
+        "streams": {
+          "head": "51549518",
+          "logs": "51549517",
+          "logLag": "1",
+          "status": "live",
+          "lastLogAt": 1789888381763,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549520",
+        "slot0": "51549520",
+        "logBatches": 14,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549520",
+          "hash": "0xe6bbb423dcff6714d98dd0b8f92faa829976e114cbfb0f7a1e31bacdc6f288bd",
+          "parentHash": "0x1bc3ac5b98ae48181dae4d06718593c10311ea28f5341c407caaec3a8ea59cbc",
+          "timestamp": "1789888387",
+          "logsBloom": "0x4831254407e172a223923e81e20e9b98f1772032c76d085b1e97b4e3ab87822b5fbbbd6392ac2211a6920cbfd200bf356e9c3d34d5012752b63e063bdc3cb1597341f95410f7091eb285941e8700613508e9530d5319d23c014669499560c0acb9a148ba4f5f0a209f970063d243d85367c8b60a0b1dde149bc0c710cf3ea2d18d7c37096902c208fc5a1a32ccdec9865d15f62b08afec49788d32d645a894d84ee84404b7f111aad6f181c8d00e56a7bbb444534f3e40ecc9df130d473d54aa7957206a48c9e6474441db87a52012e7f4f98c47876c435a4042a5a3c05db4a1205cb9b5541739007844633c79821fefa4c3aef04f14fa43d7dd2853f02b2ecc"
+        },
+        "applied": {
+          "number": "51549520",
+          "hash": "0xe6bbb423dcff6714d98dd0b8f92faa829976e114cbfb0f7a1e31bacdc6f288bd",
+          "parentHash": "0x1bc3ac5b98ae48181dae4d06718593c10311ea28f5341c407caaec3a8ea59cbc",
+          "timestamp": "1789888387"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549520"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 26146.429642000003,
+      "endpointHead": "51549520",
+      "currentBlock": "51549520",
+      "latestEvents": "51549520",
+      "latestSlot0": "51549520",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 656,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 15,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 281,
+          "attempts": 311,
+          "extraAttempts": 30
+        },
+        "streams": {
+          "head": "51549520",
+          "logs": "51549520",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888387896,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549522",
+        "slot0": "51549523",
+        "logBatches": 16,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549523",
+          "hash": "0xc3edd629606c5407ceed8d1b3dff4ffb4d538343a23b893304c99939f2e7deb4",
+          "parentHash": "0x31fa59c1d7ff33042f2e76c909b13d803e248f27e3fbb2460859cb8309f53a54",
+          "timestamp": "1789888393"
+        },
+        "applied": {
+          "number": "51549522",
+          "hash": "0x31fa59c1d7ff33042f2e76c909b13d803e248f27e3fbb2460859cb8309f53a54",
+          "parentHash": "0x8241049bb86d0d06a99026c100c4c30bd54b6209856e9e3265cd1c499b2da63c",
+          "timestamp": "1789888391"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549522"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "1",
+      "elapsedMs": 31301.812136,
+      "endpointHead": "51549523",
+      "currentBlock": "51549523",
+      "latestEvents": "51549522",
+      "latestSlot0": "51549523",
+      "currentLag": "0",
+      "eventLag": "1",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 276,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 18,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 293,
+          "attempts": 326,
+          "extraAttempts": 33
+        },
+        "streams": {
+          "head": "51549523",
+          "logs": "51549522",
+          "logLag": "1",
+          "status": "live",
+          "lastLogAt": 1789888391859,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549525",
+        "slot0": "51549525",
+        "logBatches": 19,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549525",
+          "hash": "0x22ef1b5052e9479f1f8e28c5e1a2f377d2105515e0e6d4cbca0494039ca417a2",
+          "parentHash": "0x276dcd137f8b27dc57ae4fa7a411048221d5a3f620ada716786f415daebdc6e5",
+          "timestamp": "1789888397",
+          "logsBloom": "0xd7137306070950f0e8a4fc3d6b1d98b031571a50f26c418a3d079662ac97a4831bebe6b615d23399e7278a9fa3c4b6b0ee5e9d46a4496166fff6c69372a6638b775aa6d810d7571e968594489d49662510466d159acfb3f802e2404ab776c3c6a6bd689aca8ec2385a65819184ca3f40d7e1fe1a2a9c7604fac0871a5e0aae11a7fb1a0af982580cffdbde12e654402c76b9b31baf35fc0238ce00540db474f9c2e21e4bcec8b03c46d1578f88ab5e5bfb194cd35139466cc9cf1b6f6c00479230d7d87b4069fe797ac13b64c030bab12cbf9167df28a9bac9d394b39abdfa90e4beac345f0694c278cc49fe4f6356eea7afb6344d97ecd63f59adefe3ebffcd"
+        },
+        "applied": {
+          "number": "51549525",
+          "hash": "0x22ef1b5052e9479f1f8e28c5e1a2f377d2105515e0e6d4cbca0494039ca417a2",
+          "parentHash": "0x276dcd137f8b27dc57ae4fa7a411048221d5a3f620ada716786f415daebdc6e5",
+          "timestamp": "1789888397"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549525"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 36458.061245000004,
+      "endpointHead": "51549525",
+      "currentBlock": "51549525",
+      "latestEvents": "51549525",
+      "latestSlot0": "51549525",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 911,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 20,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 303,
+          "attempts": 338,
+          "extraAttempts": 35
+        },
+        "streams": {
+          "head": "51549525",
+          "logs": "51549525",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888397951,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549528",
+        "slot0": "51549528",
+        "logBatches": 22,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549528",
+          "hash": "0x9546fe4d039590b846115afbc96bdbd78533d1e1f36dc7f2976af451ad3da407",
+          "parentHash": "0x31586068cbac4a242f08c9d96d20cf17bea024f9e158aa7769782857bf960cc8",
+          "timestamp": "1789888403",
+          "logsBloom": "0x10a4bb4925089408c00a75009709112272fb1c04e04c010d386c8442298406970d694642181410d9044e8a1f2b067628de1d8c040da263358ef4079740bcb5e03650c0d22171043c5715575c0e10172c90c424199a6cd2b01422c014ad76da4da58834889a9ef6c471048a695e420c03f386d6034ad44e04df41ec12640f8295ab7e4e18bf86602c6872169fde1cb6813325b103e822c02af340c0fe24f452592a6b94f2f8d011687044f1490b049502fb54cc13049f82ccd3e717b3cb91d3e7e44c166b48782fe51aa9cd740034508d2c18b40c36e8caf44206448f9a8aea0c607ce81f5496a44878c082cefe3a3be785bfe62fa9db2147fe18bc7180322ec4"
+        },
+        "applied": {
+          "number": "51549528",
+          "hash": "0x9546fe4d039590b846115afbc96bdbd78533d1e1f36dc7f2976af451ad3da407",
+          "parentHash": "0x31586068cbac4a242f08c9d96d20cf17bea024f9e158aa7769782857bf960cc8",
+          "timestamp": "1789888403"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549528"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 41618.737112,
+      "endpointHead": "51549528",
+      "currentBlock": "51549528",
+      "latestEvents": "51549528",
+      "latestSlot0": "51549528",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 196,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 23,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 316,
+          "attempts": 354,
+          "extraAttempts": 38
+        },
+        "streams": {
+          "head": "51549528",
+          "logs": "51549528",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888403827,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549530",
+        "slot0": "51549530",
+        "logBatches": 24,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549530",
+          "hash": "0xe8ed02e38d5caf5852bc712c72c9c19bdac9d9c988eb46213c01c0d91fac0d66",
+          "parentHash": "0x7cb1c9d0fa96fd28870928bca9dadbf59930d9c1d098b22dd77a3c878bb31b3c",
+          "timestamp": "1789888407",
+          "logsBloom": "0xce26778dd4097eb1ce85b923be1b99e3b95336ac7f6d4341afb698539dd5314b4daeaec7d13222d8cf1df93d2aeeffb7ff8e3457de892929df7e869b58f6a3517ed9f2cab5f20cbcdab4dd7d8ded2ab697d90d0f9a4ff2bd86d3dcba9ff9d2c4f2b440b7dede67426f6fdf118fc32ac03de17d8b7b1d36cffad1e4be766b7f588f7cdfe9ab80563dcc8f3e1ac797cf2839f7b61b68fec028dbaa56560fed1de0574cb587c3e736b8d1f2d7f689f6f3d3e7f49df796da536fc3cfd7a7192e72c37c6c15ff6c4bacfb4eb5eeb58a22d0e756bcd2fd97bc4ebacfe56f9bc99ce0f1649cfda5d76f20147f4edb6e1d8b5ffaadf3bf72e6f2207ffd6e1ef32a3fbafc"
+        },
+        "applied": {
+          "number": "51549530",
+          "hash": "0xe8ed02e38d5caf5852bc712c72c9c19bdac9d9c988eb46213c01c0d91fac0d66",
+          "parentHash": "0x7cb1c9d0fa96fd28870928bca9dadbf59930d9c1d098b22dd77a3c878bb31b3c",
+          "timestamp": "1789888407"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549530"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 46774.331675,
+      "endpointHead": "51549530",
+      "currentBlock": "51549530",
+      "latestEvents": "51549530",
+      "latestSlot0": "51549530",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 1048,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 25,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 322,
+          "attempts": 363,
+          "extraAttempts": 41
+        },
+        "streams": {
+          "head": "51549530",
+          "logs": "51549530",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888408131,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549533",
+        "slot0": "51549533",
+        "logBatches": 27,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549533",
+          "hash": "0x34ad490cc618129aa0c692f9b00e5004a55e1c7da6ea2bc727051a10f359e6ed",
+          "parentHash": "0x35531c73bd7eecfba831477bcda03f790af0dd723c5749df195472c01e9a7ddd",
+          "timestamp": "1789888413",
+          "logsBloom": "0x4c1561090421413000803c0106989802354716254468800318649442790424031de984801184412425134119a2023d31651e3c440c8b234a4634130b402e4540505262fa001c15dc529c154c84314524c0c90c82026dd330040312a115d8418062a57489aa474268500409a80cc22a8203a81c0268062684abc0a492e10fb620815012ac6908440228a21a34cd7e84845645b4006839cc20510260de81a2344002414c2081c0d524834c438040521c02f9b40cb34030246c81c3b30145224a88484f406ac04e3d7107435d94e20212c024088166810003128241178a250ce210101c2a25559695007a4d010c199043a1658326802490b067469d05c780792fe6"
+        },
+        "applied": {
+          "number": "51549533",
+          "hash": "0x34ad490cc618129aa0c692f9b00e5004a55e1c7da6ea2bc727051a10f359e6ed",
+          "parentHash": "0x35531c73bd7eecfba831477bcda03f790af0dd723c5749df195472c01e9a7ddd",
+          "timestamp": "1789888413"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549533"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "0",
+      "elapsedMs": 51927.779614,
+      "endpointHead": "51549533",
+      "currentBlock": "51549533",
+      "latestEvents": "51549533",
+      "latestSlot0": "51549533",
+      "currentLag": "0",
+      "eventLag": "0",
+      "slot0Lag": "0",
+      "snapshotAgeMs": 602,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 28,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 332,
+          "attempts": 376,
+          "extraAttempts": 44
+        },
+        "streams": {
+          "head": "51549533",
+          "logs": "51549533",
+          "logLag": "0",
+          "status": "live",
+          "lastLogAt": 1789888413730,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    },
+    {
+      "progress": {
+        "logs": "51549535",
+        "slot0": "51549535",
+        "logBatches": 29,
+        "gaps": 0
+      },
+      "indexStatus": {
+        "live": "following",
+        "head": {
+          "number": "51549536",
+          "hash": "0x2ad7d827aa0c23d6624538ef0f73d050bc8bd49b0f150f15f615a5f09ab37090",
+          "parentHash": "0xfcc85a1acd2e01ebb4e643cbb17fe1ad69f98e5e05e3320792dfb6f3c21fc3a5",
+          "timestamp": "1789888419"
+        },
+        "applied": {
+          "number": "51549535",
+          "hash": "0xfcc85a1acd2e01ebb4e643cbb17fe1ad69f98e5e05e3320792dfb6f3c21fc3a5",
+          "parentHash": "0x2e145726c0818908e162edf8d821669879db41a294b991da525334efac7c6d9f",
+          "timestamp": "1789888417"
+        },
+        "history": "complete",
+        "coverage": [
+          {
+            "from": "51549406",
+            "through": "51549535"
+          }
+        ],
+        "error": null
+      },
+      "indexLag": "1",
+      "elapsedMs": 57083.181016,
+      "endpointHead": "51549536",
+      "currentBlock": "51549535",
+      "latestEvents": "51549535",
+      "latestSlot0": "51549535",
+      "currentLag": "1",
+      "eventLag": "1",
+      "slot0Lag": "1",
+      "snapshotAgeMs": 1734,
+      "metrics": {
+        "multicall": {
+          "batches": 6,
+          "calls": 54,
+          "singles": 31,
+          "fallbacks": 0
+        },
+        "requests": {
+          "reads": 346,
+          "attempts": 394,
+          "extraAttempts": 48
+        },
+        "streams": {
+          "head": "51549536",
+          "logs": "51549535",
+          "logLag": "1",
+          "status": "live",
+          "lastLogAt": 1789888417753,
+          "error": null
+        },
+        "http": [
+          {
+            "endpoint": "http://127.0.0.1:36321/1",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          },
+          {
+            "endpoint": "http://127.0.0.1:36321/0",
+            "envelopes": 2,
+            "requests": 2,
+            "batches": 0,
+            "singles": 2,
+            "fallbacks": 0,
+            "resends": 0,
+            "maxRps": 20
+          }
+        ]
+      }
+    }
+  ],
+  "metrics": {
+    "multicall": {
+      "batches": 6,
+      "calls": 54,
+      "singles": 32,
+      "fallbacks": 0
+    },
+    "requests": {
+      "reads": 352,
+      "attempts": 401,
+      "extraAttempts": 49
+    },
+    "streams": {
+      "head": "51549537",
+      "logs": "51549537",
+      "logLag": "0",
+      "status": "live",
+      "lastLogAt": 1789888422003,
+      "error": null
+    },
+    "http": [
+      {
+        "endpoint": "http://127.0.0.1:36321/1",
+        "envelopes": 2,
+        "requests": 2,
+        "batches": 0,
+        "singles": 2,
+        "fallbacks": 0,
+        "resends": 0,
+        "maxRps": 20
+      },
+      {
+        "endpoint": "http://127.0.0.1:36321/0",
+        "envelopes": 2,
+        "requests": 2,
+        "batches": 0,
+        "singles": 2,
+        "fallbacks": 0,
+        "resends": 0,
+        "maxRps": 20
+      }
+    ]
+  },
+  "depthChecks": {
+    "sizes": [
+      {
+        "below": 10,
+        "above": 10,
+        "snapshots": 63
+      }
+    ],
+    "minimumTick": -197777,
+    "maximumTick": -197777
+  }
+}
