@@ -27,24 +27,20 @@ test('live Base RPC: Viem public reads match the EvmClient adapter', async () =>
     const blockNumber = head - 5n
     const checks = [
       () => direct.getChainId(),
-      () => direct.getBlockNumber(),
       () => direct.getBalance({ address: zero, blockNumber }),
       () => direct.getCode({ address: weth, blockNumber }),
       () => direct.getTransactionCount({ address: zero, blockNumber }),
       () => direct.getBlock({ blockNumber, includeTransactions: false }),
       () => direct.getBlockTransactionCount({ blockNumber }),
-      () => direct.getGasPrice(),
       () => direct.getLogs({ address: weth, fromBlock: blockNumber, toBlock: blockNumber }),
     ]
     const adaptedChecks = [
       () => adapted.getChainId(),
-      () => adapted.getBlockNumber(),
       () => adapted.getBalance({ address: zero, blockNumber }),
       () => adapted.getCode({ address: weth, blockNumber }),
       () => adapted.getTransactionCount({ address: zero, blockNumber }),
       () => adapted.getBlock({ blockNumber, includeTransactions: false }),
       () => adapted.getBlockTransactionCount({ blockNumber }),
-      () => adapted.getGasPrice(),
       () => adapted.getLogs({ address: weth, fromBlock: blockNumber, toBlock: blockNumber }),
     ]
     for (let index = 0; index < checks.length; index++) {
@@ -52,6 +48,13 @@ test('live Base RPC: Viem public reads match the EvmClient adapter', async () =>
       const actual = yield* Effect.promise(adaptedChecks[index])
       assert.deepEqual(actual, expected)
     }
+    // Latest height and gas price can change between requests. Compare stable reads above.
+    const adaptedHead = yield* Effect.promise(() => adapted.getBlockNumber({ cacheTime: 0 }))
+    const afterHead = yield* Effect.promise(() => direct.getBlockNumber({ cacheTime: 0 }))
+    assert.ok(adaptedHead >= blockNumber && adaptedHead <= afterHead)
+    const gasPrice = yield* Effect.promise(() => adapted.getGasPrice())
+    assert.equal(typeof gasPrice, 'bigint')
+    assert.ok(gasPrice >= 0n)
     const abi = [
       { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
       { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },

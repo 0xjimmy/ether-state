@@ -1,6 +1,6 @@
 {
   "name": "ether-state",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Library for syncing state from contracts.",
   "repository": {
     "type": "git",
@@ -20,7 +20,7 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "effect": "^4.0.0-rc.115"
+    "effect": "4.0.0-rc.116"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260915.1",

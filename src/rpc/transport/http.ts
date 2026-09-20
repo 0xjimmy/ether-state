@@ -100,6 +100,16 @@ export class HttpBatcher {
 		return this.execute(requests).pipe(Effect.flatMap((value) => {
 			if (!Array.isArray(value)) {
 				if (value !== null && typeof value === "object" && "error" in value && value.error !== null && typeof value.error === "object" &&
+					"message" in value.error && typeof value.error.message === "string") {
+					const match = /maximum (\d+) calls.*batch/i.exec(value.error.message)
+					const maximum = Number(match?.[1])
+					if (Number.isSafeInteger(maximum) && maximum > 0 && maximum < requests.length) {
+						this.limit = maximum
+						this.stats.fallbacks++
+						return this.send(requests)
+					}
+				}
+				if (value !== null && typeof value === "object" && "error" in value && value.error !== null && typeof value.error === "object" &&
 					"code" in value.error && (value.error.code === -32600 || value.error.code === -32601)) {
 					this.unsupportedUntil = Date.now() + 60_000
 					return this.send(requests)
