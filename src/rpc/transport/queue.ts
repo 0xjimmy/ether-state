@@ -92,9 +92,9 @@ export class BatchQueue<A, B, E> {
 
 interface EndpointBudget {
 	readonly permits: Semaphore.Semaphore
-	readonly livePermits: Semaphore.Semaphore
-	readonly sent: number[]
+		readonly sent: number[]
 	limit: number
+	recoverAt: number
 	active: number
 }
 
@@ -107,16 +107,24 @@ export class RequestScheduler {
 	limit(endpoint: string): number { return this.endpoints.get(endpoint)?.limit ?? this.options.rps }
 	throttle(endpoint: string): void {
 		const budget = this.endpoints.get(endpoint)
-		if (budget !== undefined) budget.limit = Math.max(1, Math.min(budget.limit - 1, budget.sent.length - 1))
+		if (budget !== undefined) { budget.limit = Math.max(1, Math.floor(budget.limit * 0.75)); budget.recoverAt = Date.now() + 5_000 }
 	}
 
-	run<A, E, R>(endpoint: string, live: boolean, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | QueueFull, R> {
+	recover(endpoint: string): void {
+		const budget = this.endpoints.get(endpoint)
+		if (budget !== undefined && Date.now() >= budget.recoverAt) {
+			budget.limit = Math.min(this.options.rps, budget.limit + 1)
+			budget.recoverAt = Date.now() + 5_000
+		}
+	}
+
+	run<A, E, R>(endpoint: string, _live: boolean, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | QueueFull, R> {
 		return Effect.suspend((): Effect.Effect<A, E | QueueFull, R> => {
 			if (this.queued >= this.options.capacity) return Effect.fail<QueueFull>({ _tag: "QueueFull", capacity: this.options.capacity })
 			let budget = this.endpoints.get(endpoint)
 			if (budget === undefined) {
-				budget = { permits: Semaphore.makeUnsafe(this.options.concurrency), livePermits: Semaphore.makeUnsafe(2),
-					sent: [], limit: this.options.rps, active: 0 }
+				budget = { permits: Semaphore.makeUnsafe(this.options.concurrency),
+					sent: [], limit: this.options.rps, recoverAt: 0, active: 0 }
 				this.endpoints.set(endpoint, budget)
 			}
 			const selected = budget
@@ -129,7 +137,7 @@ export class RequestScheduler {
 				selected.sent.push(now)
 				return Effect.void
 			})
-			return (live ? selected.livePermits : selected.permits).withPermit(acquire.pipe(Effect.andThen(effect))).pipe(
+			return selected.permits.withPermit(acquire.pipe(Effect.andThen(effect))).pipe(
 				Effect.ensuring(Effect.sync(() => { this.queued--; selected.active-- })))
 		})
 	}

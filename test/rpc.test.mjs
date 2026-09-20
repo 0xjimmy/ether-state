@@ -60,3 +60,30 @@ test('RPC schemas encode bigint quantities and hash-pinned reads', async () => {
   }))
   assert.deepEqual(request.params[1], { blockNumber: '0x2a' })
 })
+
+test('HTTP batches learn a provider item limit and split future batches', async () => {
+  const { HttpBatcher } = await import('../src/rpc/transport/http.ts')
+  const { HttpClient, FetchHttpClient } = await import('effect/unstable/http')
+  const { Scope } = await import('effect')
+  const sizes = []
+  const server = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json()
+    const items = Array.isArray(body) ? body : [body]
+    sizes.push(items.length)
+    if (items.length > 2) return Response.json({ jsonrpc: '2.0', id: null, error: { code: -32014, message: 'maximum 2 calls in 1 batch' } })
+    const results = items.map((item) => ({ jsonrpc: '2.0', id: item.id, result: '0x1' }))
+    return Response.json(Array.isArray(body) ? results : results[0])
+  } })
+  try {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const batch = new HttpBatcher({ endpoint: `http://127.0.0.1:${server.port}`, client: yield* HttpClient.HttpClient,
+        scope: yield* Scope.Scope, window: 5, size: 4, maxBytes: 10000, capacity: 20, timeout: 1000 })
+      for (let round = 0; round < 2; round++) {
+        const values = yield* Effect.all(Array.from({ length: 4 }, () => batch.request({ jsonrpc: '2.0', method: 'eth_blockNumber', params: [] })), { concurrency: 'unbounded' })
+        assert.ok(values.every((value) => value.result === '0x1'))
+      }
+    })).pipe(Effect.provide(FetchHttpClient.layer)))
+    assert.equal(sizes.filter((size) => size > 2).length, 1)
+    assert.ok(sizes.slice(1).every((size) => size <= 2))
+  } finally { server.stop(true) }
+})

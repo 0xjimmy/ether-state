@@ -109,6 +109,7 @@ export interface ContractRead {
 }
 
 export class MulticallReads {
+	private blockVerificationSupported = true
 	private readonly groups = new Map<string, BatchQueue<RpcTransactionRequest, string, CallError>>()
 	readonly stats = { batches: 0, calls: 0, singles: 0, fallbacks: 0 }
 
@@ -120,7 +121,7 @@ export class MulticallReads {
 	}) {}
 
 	request(read: ContractRead & { readonly block: RpcBlockReference; readonly blockNumber: bigint }): Effect.Effect<string, CallError> {
-		if (read.multicall === false || typeof read.transaction.to !== "string" || read.transaction.to.toLowerCase() === address.toLowerCase() ||
+		if (!this.blockVerificationSupported || read.multicall === false || typeof read.transaction.to !== "string" || read.transaction.to.toLowerCase() === address.toLowerCase() ||
 			Object.keys(read.transaction).some((key) => key !== "to" && key !== "data" && key !== "input")) {
 			this.stats.singles++
 			return this.options.fetch(read.transaction, read.block)
@@ -162,6 +163,7 @@ export class MulticallReads {
 			const results = yield* Schema.decodeUnknownEffect(Results)(decoded)
 			const metadata = results[calls.length]
 			if (results.length !== calls.length + 1 || metadata?.[0] !== true || !/^0x[\da-f]{64}$/i.test(metadata[1]) || BigInt(metadata[1]) !== blockNumber) {
+				this.blockVerificationSupported = false
 				return yield* Effect.fail<InvalidMulticall>({ _tag: "InvalidMulticall", message: "Multicall block verification failed" })
 			}
 			return results.slice(0, calls.length).map(([success, data]): Exit.Exit<string, CallError> => success

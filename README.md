@@ -15,7 +15,7 @@ import { EvmClient, getChainList, getChain, getRpcEndpoints, getExplorers } from
 - Shared block, log, transaction, call, and state watches.
 - Historical logs, blocks, transactions, and receipts as collected results or streams.
 
-Reorg recovery, endpoint capability learning, and failure recovery still need work and tests. A successful live run does not prove that all recovery paths work.
+Native watch reorg rollback and broader provider failure coverage still need work and tests. A successful live run does not prove that all recovery paths work.
 
 See [examples](examples/README.md) for runnable scripts and short feature guides.
 
@@ -39,9 +39,55 @@ const program = Effect.gen(function* () {
 
 The adapter uses EvmClient for retries, batching, endpoint selection, and shared block and log streams. Concurrent plain `eth_call` reads use Multicall3. Other compatible concurrent HTTP reads use JSON-RPC batches. Calls with sender, value, gas, or state context remain direct calls. The adapter does not wrap a call that already targets Multicall3.
 
-The defaults use a zero-millisecond collection window, 20 items per batch, 256 KB per HTTP batch, and 1,024 calldata bytes per Multicall3 batch. `httpBatchWindow`, `httpBatchMaxItems`, `httpBatchMaxBytes`, `multicallWindow`, `multicallMaxCalls`, and `multicallMaxCalldataBytes` can change these limits. `hedgeDelay` controls when a second endpoint starts if the first endpoint does not answer; its default is 100 ms. The old `batchWindow` and `batchSize` options remain aliases for compatibility.
+The defaults use a zero-millisecond collection window, 20 items per batch, 256 KB per HTTP batch, and 1,024 calldata bytes per Multicall3 batch. `httpBatchWindow`, `httpBatchMaxItems`, `httpBatchMaxBytes`, `multicallWindow`, `multicallMaxCalls`, and `multicallMaxCalldataBytes` can change these limits. `hedgeDelay` sets the minimum delay for a second read attempt; its default is 100 ms. The client increases this delay from recent response times to avoid unnecessary duplicate requests. The old `batchWindow` and `batchSize` options remain aliases for compatibility.
 
 Viem `newHeads` and log subscriptions recover missed block numbers after a notification gap. Header watches fetch headers only. Log watches use one block-hash-pinned `eth_getLogs` request for each filter and block. The adapter rejects wallet methods and node-managed filter lifecycle methods. It accepts `eth_sendRawTransaction` only for an already signed transaction.
+
+### Native log and call watches
+
+`client.watchLogs()` emits all logs. Pass an address and topic filter to select logs locally.
+All native log consumers share one upstream stream. Extra filters do not add RPC requests.
+
+`client.watchLogBlocks(filter)` emits a complete log array for every processed block, including empty matches.
+Each batch includes `block` and `observedAt`. The block contains its number, hash, parent hash, timestamp, and log bloom.
+The stream fills gaps in observed block numbers and emits batches in order. This is live catch-up, not durable indexing or reorg rollback.
+Use the indexer for durable checkpoints and rollback.
+
+The log stream uses hash-pinned, unfiltered `eth_getLogs` reads for a short backlog, with up to eight blocks in flight.
+For a larger backlog, it uses ranges of up to 16 blocks and checks returned log hashes against the expected headers.
+The newest block remains on the hash-pinned path. Endpoints that reject unfiltered ranges are excluded from range reads.
+If a range fails, the client falls back to per-block reads. If unfiltered log reads are unsupported, it uses validated receipts.
+Native log tracking no longer requires full transaction bodies. Address and topic matching remains exact.
+A nonzero bloom requires logs in an unfiltered result; this check does not prove that a provider returned every log.
+
+`watchCall` and `watchState` pin reads to the reported block hash with `requireCanonical: true`.
+They keep the newest pending head while an existing read completes. These are latest-state watches, not a read for every block.
+Transient failures resume on the current head. `watchState` exposes `Retrying` and `Failed`, with the previous value when available.
+A requested historical call never silently changes its block reference.
+
+### Request recovery and progress
+
+Idempotent reads, block polling, log fetching, and historical fetches use the same internal request policy.
+Each physical RPC read has at most two concurrent attempts, four attempts total, and a total `requestTimeout` budget.
+Endpoint queue time is part of that budget. A high-level operation can require several physical reads.
+Writes such as transaction submission do not use this retry policy.
+
+The client ranks eligible endpoints by measured valid-response time, load, cooldown, and prior attempts.
+HTTP standbys can serve reads after a selected endpoint fails. Connected WebSocket endpoints remain a fallback for reads.
+Successful responses cancel losing attempts. Unsupported methods and log-range restrictions are remembered.
+HTTP batches learn reported item limits and split future batches. Rate limits reduce endpoint throughput, followed by gradual recovery. The affected method prefers other endpoints for 30 seconds, so one expensive method does not repeatedly exhaust the same provider.
+The request policy distinguishes retryable failures, endpoint rotation, unsupported methods, and permanent errors.
+
+Head discovery runs independently of log catch-up:
+
+- Below 500 ms block time, the client does not speculate about future blocks. It polls latest with a deadline of at least 500 ms, capped by `requestTimeout`, and keeps at most one polling operation active. Fresh WebSocket heads suppress polling. If a request exceeds the polling interval, the next iteration starts immediately.
+- At 500 ms or above, the client also starts a next-block request 150 ms before the expected arrival. The burst uses a 50 ms hedge interval and bounded retries. In-flight and rate limits can delay additional attempts. A separate latest-head check recovers missed announcements.
+
+`client.metrics.requests` counts reads, attempts, and extra attempts across transports. Extra attempts include hedges and retries.
+`client.metrics.streams` reports the observed head, delivered log block, lag, last progress time, and last live-read error.
+Its status is `idle`, `live`, or `degraded`. Degraded status includes stale head observations and a log backlog over the larger of two blocks or two seconds.
+The `http` counters describe the HTTP batcher only; they do not count direct HTTP requests.
+Long-lived streams can retry a failed bounded read while reporting degradation. A `never` stream error type does not guarantee freshness.
 
 Run the live Base comparison for 60 seconds per client:
 
@@ -128,7 +174,8 @@ src/
     client.ts       client setup and orchestration
     schema.ts       RPC schemas and method types
     chainList.ts    cached chain metadata
-    live.ts         block state and timing
+    live.ts         receipt validation and block timing
+    recovery.ts     exhaustive read and watch failure policies
     watch.ts        log filters and call/state watches
     history.ts      historical ranges and streams
     query.ts        request deduplication and cache

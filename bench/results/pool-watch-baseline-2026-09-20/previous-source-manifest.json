@@ -1,0 +1,17 @@
+{
+  "libraryBranch": "fix/live-log-tracking",
+  "baseCommit": "220d1e2c281bbb31f6759b7fca4c527ce4b8ea18",
+  "workingTreeSha256": {
+    "src/rpc/client.ts": "c088418e92a7dc3079c59e61ea61ecb5c73c292c6e4342e4d886b8ef7842b218",
+    "src/rpc/live.ts": "01b51c5bfbac175b231495f8609ee250e2ebbf40a27d918a1b4bb1044e7a7784",
+    "src/rpc/recovery.ts": "f7bfdf425e21b77bf74651214240539f9d42c04987ac5c7516595ea1d1c05607",
+    "src/rpc/watch.ts": "cda6e159f782e8747707ab286ecf254df1bdc2997fc595688f72304f28956e02",
+    "src/rpc/multicall.ts": "233671dd2b978a51bb9ef9219e41efc959c6a21e23a2f9daac375a7d864bf0c6",
+    "src/rpc/transport/http.ts": "7710b41e1de26fcb203f842367b16d01a23604184d85d5fc15bbe55493cc83f9",
+    "src/rpc/transport/queue.ts": "c6e864744be6f732ba77766cc4d421d69a562ad7128eebc8d3dc31ec0eb25bf1"
+  },
+  "appSha256": {
+    "src/pool-tracker.ts": "2dd83fb8babe112ed74511bba22f7502a83484c32e1b225d175982dce6e6f59b",
+    "scripts/trace-pools.mjs": "9bc8943e32a07454251690d974d3172536c88002592f216899586fd27521086f"
+  }
+}
