@@ -1,3 +1,4 @@
+import { makeLifetime } from "../src/internal/lifetime.ts"
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'
 import { Effect, Stream } from 'effect'
@@ -44,6 +45,7 @@ test('log consumers share upstream blocks and batches retain empty matches', asy
       return { ...head('hash'), block: head('hash'), logs: [log] }
     })).pipe(Stream.share({ capacity: 16, replay: 1 }))
     const client = Object.create(EvmClient.prototype)
+    client.lifetime = yield* makeLifetime
     client.logBlocks = receiptBlocks
     const [all, matched, empty] = yield* Effect.all([
       client.watchLogs().pipe(Stream.take(1), Stream.runCollect),

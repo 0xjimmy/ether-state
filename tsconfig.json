@@ -33,7 +33,18 @@
     "sourceMap": true,
     "inlineSources": true,
     "isolatedDeclarations": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "paths": {
+      "ether-state/indexer": [
+        "./src/indexer.ts"
+      ],
+      "ether-state": [
+        "./src/index.ts"
+      ],
+      "ether-state/indexer/pglite": [
+        "./src/indexer-pglite.ts"
+      ]
+    }
   },
   "include": [
     "src/**/*.ts",

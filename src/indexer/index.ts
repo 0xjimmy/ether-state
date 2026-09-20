@@ -1,3 +1,4 @@
+import { defineModel } from "./model.js"
 import { Effect, Schedule, Schema, Stream } from "effect"
 import type { EvmClient, EvmClientError } from "../rpc/client.js"
 import type { RpcBlock, RpcBlockTag, RpcLog, RpcLogFilter, RpcReceipt, RpcTransaction, RpcTransactionRequest } from "../rpc/schema.js"
@@ -334,6 +335,8 @@ export const runIndexChanges = <Value, Error, Requirements, SinkError, SinkRequi
 ): Effect.Effect<void, Error | SinkError, Requirements | SinkRequirements> => changes.pipe(Stream.runForEach(write))
 
 export class Indexer<Value, Encoded, TransformError, StoreError> {
+	static readonly define: typeof defineModel = defineModel
+
 	private constructor(
 		private readonly client: EvmClient,
 		readonly index: IndexDefinition<Value, Encoded, TransformError>,
