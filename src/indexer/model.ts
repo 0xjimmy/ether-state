@@ -11,9 +11,14 @@ import { readContext, type LogSource, type Projection, type SourceCaptureContext
 import { memoryModelStore, missingRange, missingForwardRange, modelFailure, type BlockRange, type ModelBatch, type ModelFailure,
 	type ModelStore, type ProjectionRow } from "./model-store.js"
 
+/** Evaluated once before scheduling each historical request window. */
+export type ModelHistoryBatch =
+	| { readonly unit: "minutes"; readonly size: number; readonly bufferSeconds?: number; readonly concurrency?: number }
+	| { readonly unit: "blocks"; readonly size: number; readonly concurrency?: number }
+
 export interface ModelPlan {
 	readonly live?: { readonly start: "head" | "checkpoint" }
-	readonly history?: { readonly from: bigint | "origin"; readonly through?: bigint; readonly batchSize?: number; readonly direction?: "forward" | "backward"; readonly maxLiveLagBlocks?: bigint }
+	readonly history?: { readonly from: bigint | "origin"; readonly through?: bigint; readonly batchSize?: number; readonly batch?: ModelHistoryBatch | (() => ModelHistoryBatch); readonly direction?: "forward" | "backward"; readonly maxLiveLagBlocks?: bigint }
 	readonly retention?: {
 		/** Retain source batches for at least this many recent blocks. */
 		readonly blocks?: bigint
@@ -119,11 +124,30 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 			sources.set(projection.source.name, projection.source)
 		}
 		const hasPartitionedProjections = entries.some(([, projection]) => projection.kind === "partitioned")
-		const size = options.plan.history?.batchSize ?? 256
+		const historyBatch = () => Effect.try({
+			try: () => {
+				const setting = options.plan.history?.batch
+				if (setting !== undefined && options.plan.history?.batchSize !== undefined) throw new Error("Use batch or batchSize, not both")
+				const batch = typeof setting === "function" ? setting() : setting
+				const concurrency = batch?.concurrency ?? 1
+				let size = batch?.size ?? options.plan.history?.batchSize ?? 256
+				if (batch?.unit === "minutes") {
+					const blockTime = options.client.config.network.blockTime
+					const buffer = batch.bufferSeconds ?? 15
+					if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(buffer) || buffer < 0 || !Number.isFinite(blockTime) || blockTime <= 0) throw new Error("Invalid history time window or network block time")
+					size = Math.ceil((size * 60 + buffer) * 1000 / blockTime)
+				}
+				if (!Number.isSafeInteger(size) || size < 1 || size > 100_000 || !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 16) throw new Error("History batches require 1–100000 blocks and concurrency 1–16")
+				return { size, concurrency }
+			},
+			catch: (cause) => modelFailure("definition", cause),
+		})
+		// Static plans fail at construction. Runtime callbacks are read only when work is scheduled.
+		if (typeof options.plan.history?.batch !== "function") yield* historyBatch()
 		const retention = options.plan.retention
 		const retentionEvery = retention?.everyBlocks ?? 64
 		const retentionEverySeconds = retention?.everySeconds ?? 60
-		if (!Number.isSafeInteger(size) || size < 1 || size > 100_000 || !Number.isSafeInteger(definition.version) || definition.version < 1 || definition.name.length === 0 || sources.size === 0 ||
+		if (!Number.isSafeInteger(definition.version) || definition.version < 1 || definition.name.length === 0 || sources.size === 0 ||
 			(options.plan.live === undefined && options.plan.history === undefined) ||
 			(options.plan.history?.maxLiveLagBlocks !== undefined && options.plan.history.maxLiveLagBlocks < 0n) ||
 			(retention !== undefined && retention.blocks === undefined && retention.seconds === undefined) ||
@@ -210,10 +234,10 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 			const range = { from: rangeFrom, through: rangeThrough, logs: rangeLogs }
 			return yield* Effect.forEach([...headers.values()], (block) => capture({ block: { ...block, logsBloom: "0x" }, observedAt: Date.now(), logs: [...(logsByBlock.get(block.number)?.values() ?? [])] }, range), { concurrency: 4 })
 		})
-		const fetchRange = (from: bigint, through: bigint, direction: "forward" | "backward"): Stream.Stream<readonly ModelBatch[], ModelFailure> => {
+		const fetchRange = (from: bigint, through: bigint, direction: "forward" | "backward", batchSize = Number(through - from + 1n), concurrency = 1): Stream.Stream<readonly ModelBatch[], ModelFailure> => {
 			const primary = sourceFilters[0] ?? {}
 			return rpcHistory.streamLogPages({ fromBlock: from, toBlock: through, filter: primary,
-				chunkSize: through - from + 1n, concurrency: 1, direction }).pipe(
+				chunkSize: BigInt(batchSize), concurrency, direction }).pipe(
 				Stream.mapError((cause) => modelFailure("source", cause)),
 				Stream.mapEffect((page) => Effect.gen(function* () {
 					const additional = yield* Effect.forEach(sourceFilters.slice(1), (filter) => rpcHistory.getLogs({
@@ -242,8 +266,13 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 						}
 						if (chunks.length === 0) chunks.push({ from: page.fromBlock, through: page.toBlock })
 					}
-					return Stream.fromIterable(chunks).pipe(Stream.mapEffect((chunk) => fetchRangePage(chunk.from, chunk.through,
-						page.logs.filter((log) => log.blockNumber >= chunk.from && log.blockNumber <= chunk.through))))
+					return Stream.fromIterable(chunks).pipe(Stream.mapEffect((chunk) => Effect.gen(function* () {
+						// Yield between processing chunks, not only after the entire request window.
+						const maximumLag = options.plan.history?.maxLiveLagBlocks
+						while (options.plan.live !== undefined && maximumLag !== undefined && head !== null && applied !== null && head.number - applied.number > maximumLag) yield* Effect.sleep(100)
+						return yield* fetchRangePage(chunk.from, chunk.through,
+							page.logs.filter((log) => log.blockNumber >= chunk.from && log.blockNumber <= chunk.through))
+					})))
 				}, { concurrency: 1 }))
 		}
 
@@ -627,13 +656,15 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 			const requestedFrom = origin > boundary.historyFrom ? origin : boundary.historyFrom
 			const through = plan.through ?? (options.plan.live !== undefined && hasPartitionedProjections ? liveHistoryThrough ?? -1n : applied.number)
 			if (through < requestedFrom) { yield* publishStatus({ history: "complete", error: null }); return false }
+			const batch = yield* historyBatch()
+			const windowSize = batch.size * batch.concurrency
 			const range = options.plan.history?.direction === "forward"
-				? missingForwardRange(coverage, requestedFrom, through, size)
-				: missingRange(coverage, requestedFrom, through, size)
+				? missingForwardRange(coverage, requestedFrom, through, windowSize)
+				: missingRange(coverage, requestedFrom, through, windowSize)
 			if (range === null) { yield* publishStatus({ history: "complete", error: null }); return false }
 			yield* publishStatus({ history: "backfilling", error: null })
 			const fetchRevision = revision
-			yield* fetchRange(range.from, range.through, plan.direction === "forward" ? "forward" : "backward").pipe(Stream.runForEach((batches) => Effect.gen(function* () {
+			yield* fetchRange(range.from, range.through, plan.direction === "forward" ? "forward" : "backward", batch.size, batch.concurrency).pipe(Stream.runForEach((batches) => Effect.gen(function* () {
 				const last = batches[batches.length - 1]
 				if (last !== undefined && (yield* blockAt(options.client, last.block.number)).hash !== last.block.hash)
 					return yield* Effect.fail(modelFailure("chain", "Historical range changed during fetch"))

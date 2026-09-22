@@ -701,3 +701,114 @@ test('close waits for an active PGlite transaction before releasing its writer',
   }))
  } finally { releaseTransaction(); await database.close() }
 }, 10000)
+
+for (const direction of ['forward', 'backward']) test(`history reads runtime minute batches between ordered concurrent windows (${direction})`, async () => run(Effect.gen(function* () {
+  const blocks = Array.from({length: 31}, (_, i) => block(i, i))
+  const base = fixture(blocks)
+  let batch = { unit: 'minutes', size: 0.05, bufferSeconds: 0, concurrency: 1 }
+  const requests = []
+  let active = 0, maximum = 0
+  const client = { ...base, config: { network: { chainId: 1n, blockTime: 1000 } },
+    fetchOne: request => {
+      if (request.method !== 'eth_getLogs') return base.fetchOne(request)
+      return Effect.gen(function* () {
+        const {fromBlock, toBlock} = request.params[0]
+        requests.push([fromBlock, toBlock])
+        active++; maximum = Math.max(maximum, active)
+        yield* Effect.sleep(fromBlock % 2n === 0n ? 4 : 1)
+        active--
+        // Simulate a controller changing settings while this window is in flight.
+        batch = { unit: 'minutes', size: 0.1, bufferSeconds: 0, concurrency: 2 }
+        return yield* base.fetchOne(request)
+      })
+    },
+  }
+  const instance = yield* definition.make({client, params: {address: `runtime-${direction}`},
+    plan: {history: {from: 0n, through: 30n, direction, batch: () => batch}}})
+  yield* instance.run()
+  expect(maximum).toBe(2)
+  expect(requests[0]).toEqual(direction === 'forward' ? [0n, 2n] : [28n, 30n])
+  expect(requests.slice(1, 3)).toEqual(direction === 'forward' ? [[3n, 8n], [9n, 14n]] : [[22n, 27n], [16n, 21n]])
+  const covered = requests.flatMap(([from, through]) => Array.from({length: Number(through - from + 1n)}, (_, i) => from + BigInt(i)))
+  expect(covered.length).toBe(31)
+  expect(new Set(covered).size).toBe(31)
+  expect((yield* instance.status).coverage).toEqual([{from: 0n, through: 30n}])
+  const candles = yield* instance.read('candles')
+  expect(candles.find(row => row.key === '0')?.value).toEqual({open: 0, close: 30, total: 465})
+})))
+
+test('minute batches include the buffer and use the network block time', async () => run(Effect.gen(function* () {
+  const blocks = Array.from({length: 14}, (_, i) => block(i))
+  const base = fixture(blocks), requests = []
+  const client = {...base, config: {network: {chainId: 1n, blockTime: 12000}}, fetchOne: request => {
+    if (request.method === 'eth_getLogs') requests.push(request.params[0])
+    return base.fetchOne(request)
+  }}
+  const instance = yield* definition.make({client, params: {address: 'buffer'},
+    plan: {history: {from: 0n, direction: 'forward', batch: {unit: 'minutes', size: 1}}}})
+  yield* instance.run()
+  expect(requests.map(r => [r.fromBlock, r.toBlock])).toEqual([[0n, 6n], [7n, 13n]])
+})))
+
+test('invalid runtime batch fails before the next request', async () => run(Effect.gen(function* () {
+  const base = fixture(chain())
+  let size = 3, requests = 0
+  const client = {...base, fetchOne: request => {
+    if (request.method === 'eth_getLogs') { requests++; size = 0 }
+    return base.fetchOne(request)
+  }}
+  const instance = yield* definition.make({client, params: {address: 'invalid-batch'},
+    plan: {history: {from: 0n, batch: () => ({unit: 'blocks', size})}}})
+  const result = yield* Effect.result(instance.run())
+  expect(result._tag).toBe('Failure')
+  expect(result.failure.stage).toBe('definition')
+  expect(requests).toBe(1)
+})))
+
+test('closing the index cancels all concurrent history requests', async () => run(Effect.gen(function* () {
+  const base = fixture(chain())
+  let active = 0
+  const client = {...base, fetchOne: request => request.method === 'eth_getLogs'
+    ? Effect.scoped(Effect.acquireRelease(Effect.sync(() => { active++ }), () => Effect.sync(() => { active-- })).pipe(Effect.andThen(Effect.never)))
+    : base.fetchOne(request)}
+  const instance = yield* definition.make({client, params: {address: 'cancel-history'},
+    plan: {history: {from: 0n, batch: {unit: 'blocks', size: 2, concurrency: 3}}}})
+  const worker = yield* instance.run().pipe(Effect.forkScoped)
+  yield* waitUntil(() => Effect.succeed(active === 3))
+  yield* instance.close()
+  yield* Fiber.await(worker)
+  expect(active).toBe(0)
+})))
+
+test('history yields within a large request window when live head moves ahead', async () => run(Effect.gen(function* () {
+  const blocks = Array.from({length: 201}, (_, i) => block(i))
+  const live = yield* Queue.unbounded(), heads = yield* Queue.unbounded()
+  const base = fixture(blocks, live), storage = memoryModelStore()
+  const next = block(201)
+  let paused = false, historyHeaders = 0
+  const client = {...base, watchBlocks: () => Stream.fromQueue(heads), fetchOne: request => {
+    if (request.method === 'eth_getBlockByNumber' && typeof request.params[0] === 'bigint' && request.params[0] < 200n) historyHeaders++
+    return base.fetchOne(request)
+  }}
+  const store = {...storage, commit: (id, commit) => storage.commit(id, commit).pipe(Effect.andThen(Effect.gen(function* () {
+    if (!paused && commit.batches.some(batch => batch.block.number < 200n)) {
+      paused = true
+      blocks.push(next)
+      yield* Queue.offer(heads, next)
+      yield* Effect.sleep(20)
+    }
+  })))}
+  const instance = yield* definition.make({client, store, params: {address: 'yield-history'}, plan: {
+    live: {start: 'head'}, history: {from: 0n, batchSize: 200, maxLiveLagBlocks: 0n},
+  }})
+  yield* instance.run().pipe(Effect.forkScoped)
+  yield* waitUntil(() => instance.status.pipe(Effect.map(status => status.head?.number === 201n)))
+  yield* Effect.sleep(60)
+  const before = historyHeaders
+  yield* Effect.sleep(150)
+  expect(historyHeaders).toBe(before)
+  const logs = yield* base.fetchOne({method: 'eth_getLogs', params: [{blockHash: next.hash}]})
+  yield* Queue.offer(live, {block: next, logs, observedAt: Date.now()})
+  yield* waitUntil(() => instance.status.pipe(Effect.map(status => status.applied?.number === 201n)))
+  yield* waitUntil(() => Effect.succeed(historyHeaders > before))
+})))

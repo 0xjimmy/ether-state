@@ -61,6 +61,51 @@ const instance = yield* Counter.make({
 yield* instance.run()
 ```
 
+### Runtime history batches
+
+Use `history.batch` to select request ranges in minutes or blocks. A callback is
+read once before each request window. It can read a signal or a controller's
+current settings without restarting the index.
+
+```ts
+let minutes = 1
+let concurrency = 2
+
+const history = {
+  from: deploymentBlock,
+  direction: "backward" as const,
+  batch: () => ({
+    unit: "minutes" as const,
+    size: minutes,
+    bufferSeconds: 15,
+    concurrency,
+  }),
+}
+
+// Subsequent request windows use these settings.
+minutes = 2
+concurrency = 3
+```
+
+A minute batch uses `ceil((size * 60 + bufferSeconds) * 1000 / blockTime)`
+blocks. `blockTime` is the client's resolved network estimate in milliseconds.
+The default buffer is 15 seconds. This is an estimated fetch duration; partition
+boundaries still use block timestamps. The buffer does not cause overlapping
+ranges. For block ranges, use `{ unit: "blocks", size: 750, concurrency: 2 }`.
+
+Concurrency defaults to 1 and must be an integer from 1 to 16. Each request must
+cover 1 to 100,000 blocks. One window schedules up to `concurrency` contiguous
+requests from the next coverage gap. Results are processed in the selected
+direction. Each block's events remain together. In-flight requests keep their
+original settings. Provider limits can split a request into smaller pages.
+
+A callback can implement application-specific adaptation. The indexer does not
+increase concurrency or duration automatically. Invalid callback values or
+callback failures produce a definition-stage error before the next window is
+requested. Fixed settings are validated during instance creation. The existing
+`batchSize` option remains supported, but it cannot be combined with `batch`.
+Neither option changes live subscriptions, projection schemas, or fee processing.
+
 An instance identity contains the definition name, version, chain ID, normalized parameters, and an optional namespace. Address strings are normalized for identity. Bump the definition version when source or reducer semantics change. Different versions keep separate data; this API does not migrate old data.
 
 Omit the store to use a private memory store. Pass `memoryModelStore()` to share a memory store across instance restarts in one process. `pgliteModelStore` persists blocks, projection values, and resolved origins. One PGlite connection enforces one writer per instance. Applications that open the same browser database from multiple tabs must use one database owner. The companion app uses a SharedWorker to own PGlite and share each pool tracker across tabs. IndexedDB persistence works over HTTP without Web Locks. Tabs exchange updates with the worker; they do not open separate PGlite connections. If SharedWorker is unavailable, the app uses a Web Lock for persistent storage. It uses session memory only when neither ownership mechanism is available.
