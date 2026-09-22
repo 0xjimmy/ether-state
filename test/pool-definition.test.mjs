@@ -21,7 +21,8 @@ test('pool example builds ordered OHLC and absolute raw volume from backward his
   const logs=[log(blocks[1],100n,-90n,1000n),log(blocks[2],-30n,40n,1500n),log(blocks[5],50n,-60n,800n)]
   const client={config:{network:{chainId:1n}},watchBlocks:()=>Stream.never,watchLogBlocks:()=>Stream.never,
    call:({transaction})=>Effect.succeed(transaction.data===abi.encodeFunctionData('slot0')?abi.encodeFunctionResult('slot0',[800n,0,0,0,0,0,true]):abi.encodeFunctionResult('liquidity',[1000n])),
-   fetchOne:({method,params})=>Effect.succeed(method==='eth_getLogs'?logs.filter(log=>log.blockHash===params[0].blockHash):params[0]==='latest'?blocks.at(-1):blocks.find(block=>block.number===params[0])??null),
+   fetchOne:({method,params})=>Effect.succeed(method==='eth_getLogs'?logs.filter(log=>params[0].blockHash!==undefined
+    ? log.blockHash===params[0].blockHash : log.blockNumber>=params[0].fromBlock&&log.blockNumber<=params[0].toBlock):params[0]==='latest'?blocks.at(-1):blocks.find(block=>block.number===params[0])??null),
   }
   const instance=yield* PoolIndex.make({client,params:{address:pool},plan:{history:{from:0n,batchSize:2}}})
   yield* instance.run()

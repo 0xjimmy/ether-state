@@ -141,6 +141,21 @@ export class MulticallReads {
 	}
 
 	private run(calls: readonly RpcTransactionRequest[], block: RpcBlockReference, blockNumber: bigint): Effect.Effect<readonly Exit.Exit<string, CallError>[], CallError> {
+		const positions = new Map<string, number>()
+		const unique: RpcTransactionRequest[] = []
+		const indexes = calls.map((call) => {
+			const key = JSON.stringify(call, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value)
+			const saved = positions.get(key)
+			if (saved !== undefined) return saved
+			const index = unique.length
+			positions.set(key, index)
+			unique.push(call)
+			return index
+		})
+		return this.runUnique(unique, block, blockNumber).pipe(Effect.map((results) => indexes.map((index) => results[index] ?? Exit.die("Missing deduplicated result"))))
+	}
+
+	private runUnique(calls: readonly RpcTransactionRequest[], block: RpcBlockReference, blockNumber: bigint): Effect.Effect<readonly Exit.Exit<string, CallError>[], CallError> {
 		const singles = () => {
 			this.stats.singles += calls.length
 			return Effect.forEach(calls, (call) => Effect.exit(this.options.fetch(call, block)), { concurrency: 4 })

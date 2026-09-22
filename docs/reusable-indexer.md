@@ -53,7 +53,8 @@ const instance = yield* Counter.make({
   store: yield* pgliteModelStore(database),
   plan: {
     live: { start: "head" },
-    history: { from: deploymentBlock, direction: "backward", batchSize: 8 },
+    history: { from: deploymentBlock, direction: "backward", batchSize: 256 },
+	retention: { seconds: 86_400n },
   },
 })
 
@@ -64,7 +65,7 @@ An instance identity contains the definition name, version, chain ID, normalized
 
 Omit the store to use a private memory store. Pass `memoryModelStore()` to share a memory store across instance restarts in one process. `pgliteModelStore` persists blocks, projection values, and resolved origins. One PGlite connection enforces one writer per instance. Applications that open the same browser database from multiple tabs must use one database owner. The companion app uses a SharedWorker to own PGlite and share each pool tracker across tabs. IndexedDB persistence works over HTTP without Web Locks. Tabs exchange updates with the worker; they do not open separate PGlite connections. If SharedWorker is unavailable, the app uses a Web Lock for persistent storage. It uses session memory only when neither ownership mechanism is available.
 
-Storage retains collected history. There is no automatic pruning or retention policy in this version.
+Without `plan.retention`, storage retains collected history. Retention accepts `blocks`, `seconds`, or both. The runtime keeps the wider range when both apply. It also keeps the preceding source boundary block and at least 128 recent blocks for reorg recovery. `everyBlocks` controls periodic live pruning and defaults to 64. Retention runs at startup and on a scoped maintenance timer. Boundary lookups run outside the commit lock; only the storage changes use the serialized writer lane. Each store adapter removes older source batches and completed partition rows.
 
 ## Select coverage and resume behavior
 
@@ -72,12 +73,22 @@ Storage retains collected history. There is no automatic pruning or retention po
 - `live.start: "checkpoint"` restores a canonical stored state and applies missing blocks before it reaches head.
 - `history.from: bigint` defines an inclusive requested lower bound.
 - `history.from: "origin"` calls the definition's origin resolver and persists its verified block reference.
-- `history.through: bigint` defines an inclusive upper bound. Without it, a live job fills through its applied block. A history-only job captures head at startup.
+- `history.through: bigint` defines an inclusive upper bound. A history-only job captures head at startup. A live job with no explicit bound starts history through its startup head immediately. Later boundaries extend that bound. Historical closed periods can publish before the first live boundary; the startup open period stays hidden until it closes with complete coverage.
 - `history.direction` defaults to `"backward"`. It fills the newest missing range first. `"forward"` fills the oldest missing range first.
-- `history.batchSize` defaults to 16 and accepts 1 through 256 blocks. Historical RPC concurrency is two.
-- `history.maxLiveLagBlocks` defaults to eight. The history worker pauses before another batch when observed head exceeds applied progress by more than this limit.
+- `history.batchSize` defaults to 256 and accepts 1 through 100,000 blocks. It controls the missing log-query range. Each provider response is processed and committed in bounded groups of event blocks and boundary headers. Provider range, response-size, and timeout limits cause the log query to split.
+- `history.maxLiveLagBlocks` is optional. When set, the history worker pauses before another batch when observed head exceeds applied progress by more than this limit. By default, history remains independent so fast chains cannot starve backfill.
+- `retention.blocks` limits history and storage by recent block count. The preceding block remains available to prove a partition boundary.
+- `retention.seconds` limits history and storage by block timestamp. The runtime resolves the boundary with canonical block reads.
+- `retention.everyBlocks` defaults to 64 and controls periodic pruning during live ingestion.
+- `retention.everySeconds` defaults to 60. Periodic pruning requires both the block and time intervals. Timestamp-boundary lookup runs in a maintenance lane and does not hold the live commit lock.
 
 Live ingestion and historical fetches run independently. A short commit lock serializes storage and projection writes. Backfill does not cancel an in-flight batch when head advances. It is cooperative scheduling, not a reserved RPC priority queue.
+
+Historical collection sends one log-range request for the selected history window. Provider range limits split that request automatically. Backward history yields the newest split first. Each result is processed and committed in groups of at most 62 event blocks plus two range boundaries. Header reads use concurrency eight. Source capture uses concurrency four and returns each group in canonical block order. A later page failure preserves completed coverage.
+
+Historical storage records the scanned block range separately from source batches. It reads and stores headers only for event blocks and range boundaries. This data proves empty partitions and reorg boundaries without one header request per empty block. Live capture remains dense. It uses concurrency four in groups of up to 32 blocks, then commits the group in canonical order. Source decoders must not depend on mutable cross-block execution order. Block-pinned reads and per-block caches are safe.
+
+Historical decoders also receive `SourceCaptureContext.range`, with the group's `from` and `through` headers and ordered logs filtered for that source. A decoder can share one replay keyed by those boundary hashes, then return each event's result to its block capture. This avoids repeating starting-state reads for every block. Live capture omits `range`.
 
 Coverage advances only after an atomic block and projection commit. Disjoint coverage survives restarts. With backward history, recent restart gaps take priority over older backfill. Creation resolution runs before historical collection; live ingestion continues during that lookup. Explicit block bounds can bypass discovery.
 
@@ -91,13 +102,16 @@ instance.watch("minutes")
 instance.read("minutes")
 instance.watchStatus()
 instance.watchSource(source)
+instance.watchLogs(source)
 ```
 
-Projection names and values are inferred from the definition. `read` returns stored rows. `watch` reports committed replacements and reset notifications. Source subscriptions accept a source handle whose name and filter match the instance. They report decoded apply batches and reverts. Backfill source batches can arrive in reverse windows; events inside each batch remain ordered.
+Projection names and values are inferred from the definition. `read` returns durable rows plus the instance's current memory-only partition rows. `watch` reports every projection replacement and reset notification to each active subscriber. Source subscriptions accept a source handle whose name and filter match the instance. They report every committed apply batch and revert to each active subscriber. The event feeds use non-lossy per-subscriber queues. Backfill source batches can arrive in reverse windows; events inside each batch remain ordered.
+
+`watchLogs` is the low-latency live path. It reports filtered canonical logs before source decoding, projection work, and durable commit finish. It runs independently from slow source capture. Its updates are provisional and at least once. Consumers must deduplicate log identities and apply every `revert` before they use the replacement branch. Use `watchSource` when the consumer needs committed, decoded source values.
 
 A projection update contains its key, value, block reference, period, and coverage. A reset has a null value. Consumers must clear cached values on reset. The runtime republishes retained rows after a reset.
 
-`period: "open"` describes the current time window. `coverage: "complete"` means coverage through the reported progress block, not through future time. A closed period can remain partial. Starting midway through a period does not prove that its earlier events are absent. A verified creation block can establish that lower bound. Empty blocks close periods. Empty candles have null OHLC values; this example does not carry forward the previous close.
+`period: "open"` describes a time window that started after this run observed its first boundary. Open rows stay in instance memory and remain available through `read` and `watch`. The runtime does not publish the period that was open at startup. Historical backfill runs immediately. At the next boundary, the startup period can close from the already scanned history and captured live events; any missing portion remains a gap for backfill. The store and public views contain a closed partition only when its source coverage is complete. Startup removes legacy open or partial rows and rebuilds missing complete rows from retained source batches. Scanned coverage between timestamp anchors also identifies complete empty periods. Empty candles have null OHLC values; this example does not carry forward the previous close.
 
 Closed periods are not necessarily finalized. This API currently follows latest head and does not attach finalized candle status.
 
@@ -118,7 +132,7 @@ Archive state and log range support vary by endpoint. A failed request is not a 
 
 The pool origin resolver first attempts archive-state binary search through EvmClient. It verifies the factory creation event at the resulting block. If that path fails, it scans filtered factory logs. Only explicit range-size errors reduce the window; rate limits and transport failures do not. All attempts remain subject to the client's bounded request policy. The client does not yet retain a full per-method archive-depth map.
 
-Backfill currently reads headers and hash-pinned logs per block. It prioritizes live progress over historical throughput. The benchmarks cover a 100-block backfill, not completion of a pool's entire lifetime. Large histories need a later range-fetch optimization before this should be treated as a high-throughput historical indexer.
+Backfill streams range queries and reads headers for event blocks and range boundaries. It does not fetch every empty block. Source decoders can still perform extra reads; exact pool fee replay is one example. Historical throughput therefore depends on the source decoder and provider latency as well as log-query size. The existing benchmarks do not measure completion of a pool's entire lifetime.
 
 ## Close an instance or client
 

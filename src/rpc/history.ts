@@ -8,6 +8,7 @@ export interface HistoricalLogsRequest {
 	readonly filter?: RpcLogFilter
 	readonly chunkSize?: bigint
 	readonly concurrency?: number
+	readonly direction?: "forward" | "backward"
 }
 
 export interface HistoricalRpcLog extends RpcLog {
@@ -60,7 +61,17 @@ const defaultChunkSize = 1_000n
 const defaultConcurrency = 4
 const splitMessage = /block range|range limit|response size|result.*large|too many.*result|query returned|timeout|timed out/i
 
-const ranges = function* (fromBlock: bigint, toBlock: bigint, chunkSize: bigint): Generator<BlockRange> {
+
+const ranges = function* (fromBlock: bigint, toBlock: bigint, chunkSize: bigint, direction: "forward" | "backward" = "forward"): Generator<BlockRange> {
+	if (direction === "backward") {
+		for (let end = toBlock; end >= fromBlock;) {
+			const start = end - chunkSize + 1n > fromBlock ? end - chunkSize + 1n : fromBlock
+			yield { fromBlock: start, toBlock: end }
+			if (start === fromBlock) break
+			end = start - 1n
+		}
+		return
+	}
 	for (let start = fromBlock; start <= toBlock; start += chunkSize) {
 		const end = start + chunkSize - 1n
 		yield { fromBlock: start, toBlock: end < toBlock ? end : toBlock }
@@ -115,20 +126,21 @@ export class RpcHistory {
 				toBlock: request.toBlock,
 			})
 		}
-		return Stream.fromIterable(ranges(request.fromBlock, request.toBlock, chunkSize)).pipe(Stream.grouped(concurrency),
+		const direction = request.direction ?? "forward"
+		return Stream.fromIterable(ranges(request.fromBlock, request.toBlock, chunkSize, direction)).pipe(Stream.grouped(concurrency),
 			Stream.flatMap((window) => Stream.suspend(() => {
-				let cursor = window[0].fromBlock
+				let cursor = direction === "forward" ? window[0].fromBlock : window[0].toBlock
 				const ready = new Map<bigint, HistoricalLogPage>()
-				return Stream.mergeAll(window.map((range) => this.streamRange(range, request.filter ?? {})), { concurrency }).pipe(
+				return Stream.mergeAll(window.map((range) => this.streamRange(range, request.filter ?? {}, direction)), { concurrency }).pipe(
 					Stream.map((page) => {
-						ready.set(page.fromBlock, page)
+						ready.set(direction === "forward" ? page.fromBlock : page.toBlock, page)
 						const output: HistoricalLogPage[] = []
 						while (ready.has(cursor)) {
 							const next = ready.get(cursor)
 							if (next === undefined) break
 							ready.delete(cursor)
 							output.push(next)
-							cursor = next.toBlock + 1n
+							cursor = direction === "forward" ? next.toBlock + 1n : next.fromBlock - 1n
 						}
 						return output
 					}), Stream.flattenIterable)
@@ -181,6 +193,7 @@ export class RpcHistory {
 	private streamRange(
 		range: BlockRange,
 		filter: RpcLogFilter,
+		direction: "forward" | "backward" = "forward",
 	): Stream.Stream<HistoricalLogPage, RpcHistoryError> {
 		const rpcFilter: RpcFilter = { ...filter, ...range }
 		return Stream.fromEffect(this.client.fetchOne({ method: "eth_getLogs", params: [rpcFilter] }).pipe(
@@ -195,8 +208,9 @@ export class RpcHistory {
 						return Stream.fail<HistoricalRangeUnavailable>({ _tag: "HistoricalRangeUnavailable", ...range, cause: error })
 					}
 					const middle = (range.fromBlock + range.toBlock) / 2n
-					return Stream.concat(this.streamRange({ fromBlock: range.fromBlock, toBlock: middle }, filter),
-						this.streamRange({ fromBlock: middle + 1n, toBlock: range.toBlock }, filter))
+					const lower = this.streamRange({ fromBlock: range.fromBlock, toBlock: middle }, filter, direction)
+					const upper = this.streamRange({ fromBlock: middle + 1n, toBlock: range.toBlock }, filter, direction)
+					return direction === "forward" ? Stream.concat(lower, upper) : Stream.concat(upper, lower)
 				},
 			),
 		)
