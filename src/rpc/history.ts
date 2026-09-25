@@ -1,3 +1,4 @@
+import { RpcPriority } from "./priority.js"
 import { Effect, Schedule, Stream } from "effect"
 import type { EvmClient, EvmClientError } from "./client.js"
 import type { RpcBlock, RpcFilter, RpcLog, RpcLogFilter, RpcTransaction, RpcReceipt } from "./schema.js"
@@ -59,7 +60,7 @@ export interface HistoricalBlocksRequest {
 
 const defaultChunkSize = 1_000n
 const defaultConcurrency = 4
-const splitMessage = /block range|range limit|response size|result.*large|too many.*result|query returned|timeout|timed out/i
+const splitMessage = /block range|range limit|response size|result.*large|too many.*result|query returned/i
 
 
 const ranges = function* (fromBlock: bigint, toBlock: bigint, chunkSize: bigint, direction: "forward" | "backward" = "forward"): Generator<BlockRange> {
@@ -79,7 +80,7 @@ const ranges = function* (fromBlock: bigint, toBlock: bigint, chunkSize: bigint,
 }
 
 const shouldSplit = (error: EvmClientError): boolean => {
-	if (error._tag === "EndpointRequestTimeout") return true
+	if (error._tag === "EndpointRequestTimeout") return false
 	if (error._tag === "RpcError") return splitMessage.test(error.message)
 	if ("message" in error && typeof error.message === "string") return splitMessage.test(error.message)
 	return false
@@ -144,7 +145,7 @@ export class RpcHistory {
 						}
 						return output
 					}), Stream.flattenIterable)
-			})))
+			})), Stream.provideService(RpcPriority, "background"))
 	}
 
 	streamLogs(request: HistoricalLogsRequest): Stream.Stream<HistoricalRpcLog, RpcHistoryError> {
@@ -163,7 +164,7 @@ export class RpcHistory {
 			this.client.fetchOne({ method: "eth_getBlockByNumber", params: [range.fromBlock, request.full ?? false] }).pipe(
 				Effect.flatMap((block) => block?.number === range.fromBlock ? Effect.succeed(block) : Effect.fail({ _tag: "BlockUnavailable" } as const)),
 				Effect.mapError((cause): HistoricalRangeUnavailable => ({ _tag: "HistoricalRangeUnavailable", ...range, cause }))),
-		{ concurrency: request.concurrency ?? 4, unordered: false }))
+		{ concurrency: request.concurrency ?? 4, unordered: false }), Stream.provideService(RpcPriority, "background"))
 	}
 
 	getBlocks(request: HistoricalBlocksRequest): Effect.Effect<readonly RpcBlock[], RpcHistoryError> {
@@ -183,7 +184,7 @@ export class RpcHistory {
 			Effect.flatMap((receipts) => receipts !== null && receipts.length === block.transactions.length && receipts.every((receipt) => receipt.blockHash === block.hash)
 				? Effect.succeed(receipts) : Effect.fail({ _tag: "BlockUnavailable" } as const)),
 			Effect.mapError((cause): HistoricalRangeUnavailable => ({ _tag: "HistoricalRangeUnavailable", fromBlock: block.number, toBlock: block.number, cause }))),
-		{ concurrency: request.concurrency ?? 4, unordered: false }), Stream.flattenIterable)
+		{ concurrency: request.concurrency ?? 4, unordered: false }), Stream.flattenIterable, Stream.provideService(RpcPriority, "background"))
 	}
 
 	getReceipts(request: HistoricalBlocksRequest): Effect.Effect<readonly RpcReceipt[], RpcHistoryError> {

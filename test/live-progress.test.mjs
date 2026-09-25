@@ -28,6 +28,7 @@ test('100 ms chain keeps complete ordered logs while RPC responses take 150 ms',
       if (method === 'eth_getBlockByNumber') {
         const n = params[0] === 'latest' ? current() : Number(BigInt(params[0]))
         result = n <= current() ? header(n) : null
+      } else if (method === 'eth_getBlockReceipts') { result = []
       } else if (method === 'eth_getLogs') {
         logCalls++
         result = []
@@ -47,7 +48,7 @@ test('100 ms chain keeps complete ordered logs while RPC responses take 150 ms',
       Effect.provideService(References.MinimumLogLevel, 'None'), Effect.timeout('8 seconds')))
     for (let i = 1; i < result.blocks.length; i++) assert.equal(result.blocks[i].block.number, result.blocks[i - 1].block.number + 1n)
     assert.ok(current() - Number(result.blocks.at(-1).block.number) <= 8)
-    assert.ok(logCalls <= result.blocks.length + 8)
+    assert.equal(logCalls, 0)
     assert.ok(result.metrics.streams.logLag <= 8n)
   } finally { rpc.stop(true) }
 }, 10000)

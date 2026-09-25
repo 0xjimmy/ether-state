@@ -205,3 +205,32 @@ See [the runnable examples](../examples/indexer/README.md) for live memory track
 See [the cleanup and tick-window checks](../bench/results/indexer-cleanup-2026-09-20/README.md) for current validation and live traces.
 
 Upstream recovery stays in EvmClient. HTTP failures, response decoding failures, and provider parameter rejections do not stop a logical read before the client tries its recovery policy. Contract reverts and local encoding failures are terminal. An origin resolver receives an upstream failure only after the client exhausts its attempt or time budget. A blocked origin still needs a new run after an unrecoverable failure.
+
+
+## Shared live chain acquisition
+
+`EvmClient.watchChain()` emits complete block applications and canonical reverts.
+An apply includes full transactions and ordered logs. It includes receipts when
+the provider supports block receipt requests; otherwise `receipts` is null. A revert includes
+its first invalid height and the retained canonical ancestor. Fetches can run
+concurrently, but applications stay ordered. Missing data retries in the shared
+chain worker before it publishes later blocks.
+
+Live log filters and transaction filters run locally over this stream. The
+`watchFilteredLogBlocks` method is a compatibility alias for `watchLogBlocks`.
+It does not make filtered live RPC requests. Full-block watchers also wait for
+receipts. Raw `watchBlocks()` still reports observed heads before acquisition is
+complete. Use the difference between observed and applied heights to measure lag.
+
+The client retains 128 complete blocks for canonical recovery and matching block
+and receipt reads. Providers without `eth_getBlockReceipts` use one unfiltered `eth_getLogs`
+request for the block. Live acquisition never expands into individual receipt
+requests. Explicit historical receipt queries keep their own fallback. Retries, head discovery, historical reads, and contract calls remain
+additional RPC work. Subscriber count does not multiply live block acquisition.
+
+Models consume shared reverts and roll back their persisted branch. They report a
+live stall when the head is ahead and their applied block stops advancing for
+three seconds. History errors remain separate from live progress.
+
+Viem head and log subscriptions use the same complete stream. Log subscriptions
+emit removed logs after a shared revert. They do not query live logs separately.

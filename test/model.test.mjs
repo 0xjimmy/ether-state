@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { Effect, Fiber, Queue, Schema, Stream } from 'effect'
+import { Effect, Fiber, Queue, Schema, Stream, SubscriptionRef } from 'effect'
 import { Indexer, Source, Projection, memoryModelStore, missingRange } from '../src/indexer.ts'
 
 const hash = n => `0x${n.toString(16).padStart(64, '0')}`
@@ -8,7 +8,7 @@ const chain = () => Array.from({ length: 13 }, (_, i) => block(i))
 const fixture = (blocks, liveQueue) => ({
   config: { network: { chainId: 1n } },
   watchBlocks: () => Stream.never,
-  watchLogBlocks: () => liveQueue ? Stream.fromQueue(liveQueue) : Stream.never,
+  background: work => work, watchLogUpdates: () => liveQueue ? Stream.fromQueue(liveQueue) : Stream.never,
   fetchOne: ({ method, params }) => {
     if (method === 'eth_getBlockByNumber') return Effect.succeed(params[0] === 'latest' ? blocks.at(-1) : blocks.find(b => b.number === params[0]) ?? null)
     if (method === 'eth_getLogs') {
@@ -500,7 +500,7 @@ test('restart fills the newest missing minute and commits it once complete', asy
   expect((yield* store.rows(first.id,'candles')).map(row=>row.key)).toEqual(['0','60'])
   blocks.push(...Array.from({length:6},(_,i)=>block(i+13)))
   const fetched=[];const base=fixture(blocks)
-  const queue=yield* Queue.unbounded();const client={...base,watchLogBlocks:()=>Stream.fromQueue(queue),fetchOne:request=>{
+  const queue=yield* Queue.unbounded();const client={...base,background: work => work, watchLogUpdates:()=>Stream.fromQueue(queue),fetchOne:request=>{
    if(request.method==='eth_getLogs') fetched.push(request.params[0].fromBlock ?? blocks.find(b=>b.hash===request.params[0].blockHash)?.number)
    return base.fetchOne(request)
   }}
@@ -811,4 +811,57 @@ test('history yields within a large request window when live head moves ahead', 
   yield* Queue.offer(live, {block: next, logs, observedAt: Date.now()})
   yield* waitUntil(() => instance.status.pipe(Effect.map(status => status.applied?.number === 201n)))
   yield* waitUntil(() => Effect.succeed(historyHeaders > before))
+})))
+
+test('history timeout retries its worker while live indexing and coverage remain active', async () => run(Effect.gen(function* () {
+  const blocks = chain(), queue = yield* Queue.unbounded()
+  const base = fixture(blocks, queue)
+  let unavailable = true, stopped = false
+  const client = { ...base, fetchOne: request => request.method === 'eth_getLogs' && request.params[0].fromBlock !== undefined && unavailable
+    ? Effect.fail({ _tag: 'EndpointRequestTimeout', endpoint: 'request-budget', transport: 'http', method: 'eth_getLogs' })
+    : base.fetchOne(request) }
+  const index = yield* definition.make({ client, params: { address: 'pool' }, plan: { live: { start: 'head' }, history: { from: 0n, batchSize: 4 } } })
+  yield* index.run().pipe(Effect.ensuring(Effect.sync(() => { stopped = true })), Effect.forkScoped)
+  yield* waitUntil(() => index.status.pipe(Effect.map(status => status.history === 'blocked')))
+  const next = block(13); blocks.push(next)
+  yield* Queue.offer(queue, { block: next, logs: [], observedAt: Date.now() })
+  yield* waitUntil(() => index.status.pipe(Effect.map(status => status.applied?.number === 13n)))
+  expect(stopped).toBe(false)
+  const status = yield* index.status
+  expect(status.live).toBe('following'); expect(status.historyError.stage).toBe('source')
+  unavailable = false
+  yield* waitUntil(() => index.status.pipe(Effect.map(status => status.history === 'complete')))
+  expect(stopped).toBe(false)
+  expect((yield* index.status).historyError).toBeNull()
+})), 6000)
+
+
+test('live progress reports a stalled consumer and clears the error after catch-up', async () => run(Effect.gen(function* () {
+  const blocks = chain(), queue = yield* Queue.unbounded(), heads = yield* SubscriptionRef.make(blocks.at(-1))
+  const base = fixture(blocks, queue)
+  const index = yield* definition.make({client: {...base, watchBlocks: () => SubscriptionRef.changes(heads)}, params: {address: 'progress'}, plan: {live: {start: 'head'}}})
+  yield* index.run().pipe(Effect.forkScoped)
+  yield* waitUntil(() => index.status.pipe(Effect.map(s => s.live === 'following')))
+  const next = block(13); blocks.push(next); yield* SubscriptionRef.set(heads, next)
+  yield* Effect.sleep(4200)
+  expect((yield* index.status).error.cause).toContain('Live indexing stalled:')
+  yield* Queue.offer(queue, {block: next, logs: [], observedAt: Date.now()})
+  yield* waitUntil(() => index.status.pipe(Effect.map(s => s.applied?.number === 13n && s.error === null)))
+})), 8000)
+
+test('a shared chain revert rolls back the model before replacement blocks', async () => run(Effect.gen(function* () {
+  const blocks = chain(), queue = yield* Queue.unbounded(), base = fixture(blocks, queue)
+  const index = yield* definition.make({client: base, params: {address: 'shared-reorg'}, plan: {live: {start: 'head'}}})
+  yield* index.run().pipe(Effect.forkScoped)
+  yield* waitUntil(() => index.status.pipe(Effect.map(s => s.live === 'following')))
+  blocks.push(block(13))
+  yield* Queue.offer(queue, {block: blocks.at(-1), logs: [], observedAt: Date.now()})
+  yield* waitUntil(() => index.status.pipe(Effect.map(s => s.applied?.number === 13n)))
+  const replacement = {...block(13, 130, 100), parentHash: blocks[12].hash}
+  blocks[13] = replacement
+  yield* Queue.offer(queue, {revert: blocks[12]})
+  yield* Queue.offer(queue, {block: replacement, logs: [], observedAt: Date.now()})
+  yield* waitUntil(() => index.status.pipe(Effect.map(s => s.applied?.hash === replacement.hash)))
+  expect((yield* index.status).error).toBeNull()
+  expect((yield* index.status).head.number).toBe(13n)
 })))

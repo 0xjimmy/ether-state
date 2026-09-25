@@ -10,7 +10,7 @@ const definition = Indexer.define({ name: 'sparse-restore', version: 1, params: 
     rebuild: ({ events }) => Effect.succeed(events.reduce((sum, event) => sum + event.value, 0)) }) }
 } })
 const client = {
-  config: { network: { chainId: 1n } }, watchBlocks: () => Stream.never, watchLogBlocks: () => Stream.never,
+  config: { network: { chainId: 1n } }, watchBlocks: () => Stream.never, background: work => work, watchLogUpdates: () => Stream.never,
   fetchOne: ({ method, params }) => method === 'eth_getBlockByNumber'
     ? Effect.succeed(block(params[0] === 'latest' ? 180n : params[0]))
     : Effect.fail({ _tag: 'RpcError', code: -32601, message: 'Missing history unavailable in this fixture' }),

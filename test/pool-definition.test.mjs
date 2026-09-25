@@ -19,7 +19,7 @@ test('pool example builds ordered OHLC and absolute raw volume from backward his
  await Effect.runPromise(Effect.scoped(Effect.gen(function*(){
   const blocks=[0,1,2,3,4,5,6].map(makeBlock)
   const logs=[log(blocks[1],100n,-90n,1000n),log(blocks[2],-30n,40n,1500n),log(blocks[5],50n,-60n,800n)]
-  const client={config:{network:{chainId:1n}},watchBlocks:()=>Stream.never,watchLogBlocks:()=>Stream.never,
+  const client={config:{network:{chainId:1n}},watchBlocks:()=>Stream.never,background: work => work, watchLogUpdates:()=>Stream.never,
    call:({transaction})=>Effect.succeed(transaction.data===abi.encodeFunctionData('slot0')?abi.encodeFunctionResult('slot0',[800n,0,0,0,0,0,true]):abi.encodeFunctionResult('liquidity',[1000n])),
    fetchOne:({method,params})=>Effect.succeed(method==='eth_getLogs'?logs.filter(log=>params[0].blockHash!==undefined
     ? log.blockHash===params[0].blockHash : log.blockNumber>=params[0].fromBlock&&log.blockNumber<=params[0].toBlock):params[0]==='latest'?blocks.at(-1):blocks.find(block=>block.number===params[0])??null),

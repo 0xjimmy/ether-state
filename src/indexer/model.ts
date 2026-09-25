@@ -1,3 +1,4 @@
+import { RpcPriority } from "../rpc/priority.js"
 import { Cause, Effect, PubSub, Queue, Schedule, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { makeLifetime } from "../internal/lifetime.js"
 import type { Scope } from "effect"
@@ -37,6 +38,7 @@ export interface ModelStatus {
 	readonly history: "disabled" | "resolving" | "backfilling" | "complete" | "blocked"
 	readonly coverage: readonly BlockRange[]
 	readonly error: ModelFailure | null
+	readonly historyError?: ModelFailure | null
 }
 export interface ProjectionUpdate<A> {
 	readonly kind: "upsert" | "reset"
@@ -75,6 +77,17 @@ export interface ModelInstance<Outputs extends Readonly<Record<string, unknown>>
 	readonly watchLogs: (source: LogSource<unknown>) => Stream.Stream<RawSourceUpdate, ModelFailure>
 	readonly read: <K extends keyof Outputs & string>(name: K) => Effect.Effect<readonly ProjectionUpdate<Outputs[K]>[], ModelFailure>
 	readonly watch: <K extends keyof Outputs & string>(name: K) => Stream.Stream<ProjectionUpdate<Outputs[K]>, ModelFailure>
+}
+
+const retryableHistory = (error: ModelFailure): boolean => {
+	const transient = (cause: unknown, depth = 0): boolean => {
+		if (depth > 8 || cause === null || typeof cause !== "object") return false
+		if (Cause.isCause(cause)) return !Cause.hasDies(cause) && transient(Cause.squash(cause), depth + 1)
+		if ("_tag" in cause && ["EndpointRequestTimeout", "QueueFull", "BlockUnavailable", "WsRequestTimeout", "SocketError", "HttpClientError"].includes(String(cause._tag))) return true
+		if ("_tag" in cause && cause._tag === "RpcError" && "code" in cause && [-32603, -32001, -32005, -32016].includes(Number(cause.code))) return true
+		return "cause" in cause && transient(cause.cause, depth + 1)
+	}
+	return error.stage === "source" || error.stage === "chain" || error.stage === "store" || transient(error.cause)
 }
 
 const canonical = (value: unknown): string => {
@@ -490,14 +503,14 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 			}
 			yield* publishStatus({ live: options.plan.live === undefined ? "idle" : "following" })
 		}))
-		const recover = (conflictAt?: bigint): Effect.Effect<void, ModelFailure> => Effect.gen(function* () {
+		const recover = (conflictAt?: bigint, verifiedAncestor?: IndexedBlock): Effect.Effect<void, ModelFailure> => Effect.gen(function* () {
 			yield* publishStatus({ live: "recovering" })
-			const latest = yield* blockAt(options.client, "latest")
+			const latest = verifiedAncestor ?? (yield* blockAt(options.client, "latest"))
 			// Find a canonical ancestor within the retained recent window.
 			const ceiling = conflictAt ?? applied?.number ?? latest.number
 			const recent = yield* store.batches(id, { from: ceiling > 128n ? ceiling - 128n : 0n, through: ceiling })
-			let ancestor: IndexedBlock | null = null
-			for (const batch of [...recent].reverse()) {
+			let ancestor: IndexedBlock | null = verifiedAncestor ?? null
+			for (const batch of verifiedAncestor ? [] : [...recent].reverse()) {
 				if (batch.block.number > latest.number) continue
 				const canonicalBlock = yield* blockAt(options.client, batch.block.number)
 				if (canonicalBlock.hash === batch.block.hash) { ancestor = batch.block; break }
@@ -524,7 +537,7 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 				liveHistoryThrough = null
 				yield* seed(latest)
 				if (options.plan.history !== undefined && hasPartitionedProjections) liveHistoryThrough = latest.number
-				head = latest
+				if (verifiedAncestor === undefined) head = latest
 				yield* publishStatus({ live: "following", error: null })
 			}))
 			const retained = yield* store.batches(id, { startTime: forkTime > maxInterval ? forkTime - maxInterval : 0n })
@@ -580,11 +593,7 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 				}
 				const captureRevision = revision
 				const captured = yield* Effect.forEach(observed, (batch) => capture(batch), { concurrency: 4 })
-				const last = captured.at(-1)
-				if (last !== undefined && (yield* blockAt(options.client, last.block.number)).hash !== last.block.hash) {
-					yield* recover(last.block.number)
-					return
-				}
+
 				activateLivePartitions(captured)
 				yield* commit(captured, true, captureRevision)
 			})
@@ -643,7 +652,7 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 			if (origin === null) {
 				if (plan.from === "origin") {
 					if (definition.origin === undefined) return yield* Effect.fail(modelFailure("definition", "Definition has no origin resolver"))
-					yield* publishStatus({ history: "resolving", error: null })
+					yield* publishStatus({ history: "resolving", historyError: null })
 					const saved = (yield* store.rows(id, "@origin"))[0]
 					const resolved = saved !== undefined ? saved.block : yield* definition.origin({ params, client: options.client }).pipe(Effect.mapError((cause) => modelFailure("origin", cause)))
 					if ((yield* blockAt(options.client, resolved.number)).hash !== resolved.hash) return yield* Effect.fail(modelFailure("origin", "Stored origin is no longer canonical"))
@@ -655,14 +664,14 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 			const boundary = yield* retentionBoundary(applied)
 			const requestedFrom = origin > boundary.historyFrom ? origin : boundary.historyFrom
 			const through = plan.through ?? (options.plan.live !== undefined && hasPartitionedProjections ? liveHistoryThrough ?? -1n : applied.number)
-			if (through < requestedFrom) { yield* publishStatus({ history: "complete", error: null }); return false }
+			if (through < requestedFrom) { yield* publishStatus({ history: "complete", historyError: null }); return false }
 			const batch = yield* historyBatch()
 			const windowSize = batch.size * batch.concurrency
 			const range = options.plan.history?.direction === "forward"
 				? missingForwardRange(coverage, requestedFrom, through, windowSize)
 				: missingRange(coverage, requestedFrom, through, windowSize)
-			if (range === null) { yield* publishStatus({ history: "complete", error: null }); return false }
-			yield* publishStatus({ history: "backfilling", error: null })
+			if (range === null) { yield* publishStatus({ history: "complete", historyError: null }); return false }
+			yield* publishStatus({ history: "backfilling", historyError: null })
 			const fetchRevision = revision
 			yield* fetchRange(range.from, range.through, plan.direction === "forward" ? "forward" : "backward", batch.size, batch.concurrency).pipe(Stream.runForEach((batches) => Effect.gen(function* () {
 				const last = batches[batches.length - 1]
@@ -686,14 +695,27 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 				for (const [name, projection] of entries) if (projection.kind === "partitioned")
 					completedPartitions.set(name, new Set((yield* store.rows(id, name)).filter((row) => row.period === "closed" && row.coverage === "complete").map((row) => row.key)))
 				yield* publishStatus({ live: "starting", error: null })
-				const queue = yield* Queue.bounded<BlockLogBatch>(2048)
+				const queue = yield* Queue.bounded<BlockLogBatch | { readonly revert: IndexedBlock }>(2048)
 				head = yield* blockAt(options.client, "latest")
 				const startupHead = head
 				rawApplied = startupHead
 				rawRecent.set(startupHead.number, startupHead)
-				const liveLogs = options.plan.live === undefined ? Effect.never : options.client.watchLogBlocks(rawFilter).pipe(
-					Stream.runForEach((batch) => Effect.sync(() => { if (head === null || batch.block.number >= head.number) head = batch.block })
-						.pipe(Effect.andThen(publishRaw(batch).pipe(Effect.retry({ times: 3, schedule: Schedule.exponential(100), while: (error) => error.stage === "source" }))), Effect.andThen(Queue.offer(queue, batch)))))
+				const liveLogs = options.plan.live === undefined ? Effect.never : options.client.watchLogUpdates(rawFilter).pipe(
+					Stream.runForEach(update => Effect.gen(function* () {
+						if ("revert" in update) {
+							const ancestor = update.revert
+							if (ancestor.hash === null || ancestor.parentHash === null || ancestor.timestamp === null) return yield* Effect.fail(modelFailure("chain", "Incomplete revert ancestor"))
+							const block = { number: ancestor.number, hash: ancestor.hash, parentHash: ancestor.parentHash, timestamp: ancestor.timestamp }
+							rawApplied = block
+							for (const number of rawRecent.keys()) if (number > block.number) rawRecent.delete(number)
+							yield* PubSub.publish(rawUpdates, { revert: block.number + 1n })
+							yield* Queue.offer(queue, { revert: block })
+							return
+						}
+						if (head === null || update.block.number >= head.number) head = update.block
+						yield* publishRaw(update).pipe(Effect.retry({ times: 3, schedule: Schedule.exponential(100), while: error => error.stage === "source" }))
+						yield* Queue.offer(queue, update)
+					})))
 				if (options.plan.live !== undefined) yield* options.client.watchBlocks().pipe(Stream.runForEach((block) => Effect.gen(function* () {
 					if (block.hash !== null && block.parentHash !== null && block.timestamp !== null && (head === null || block.number >= head.number)) {
 						head = { number: block.number, hash: block.hash, parentHash: block.parentHash, timestamp: block.timestamp }
@@ -733,14 +755,26 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 				yield* publishStatus({ live: options.plan.live === undefined ? "idle" : "following" })
 				const history = Effect.gen(function* () {
 					if (options.plan.history === undefined) return yield* Effect.never
-					yield* applyRetention(startupHead, true)
+					let initialized = false, failures = 0
 					for (;;) {
 						if (options.plan.history.maxLiveLagBlocks !== undefined && head !== null && applied !== null && head.number - applied.number > options.plan.history.maxLiveLagBlocks) { yield* Effect.sleep(100); continue }
-						const worked = yield* historyStep().pipe(Effect.catch((error) => publishStatus({ history: "blocked", error }).pipe(Effect.flatMap(() => options.plan.live === undefined ? Effect.fail(error) : (error.stage === "source" || error.stage === "chain") ? Effect.succeed(false) : Effect.never))))
-						if (options.plan.live === undefined && !worked) return
+						const result = yield* Effect.gen(function* () {
+							if (!initialized) { yield* applyRetention(startupHead, true); initialized = true }
+							return yield* historyStep()
+						}).pipe(work => options.client.background(work), Effect.result)
+						if (result._tag === "Failure") {
+							const error = result.failure
+							yield* publishStatus({ history: "blocked", historyError: error })
+							if (options.plan.live === undefined) return yield* Effect.fail(error)
+							if (!retryableHistory(error)) return yield* Effect.never
+							yield* Effect.sleep(Math.min(30_000, 1_000 * 2 ** Math.min(failures++, 5)))
+							continue
+						}
+						failures = 0
+						if (options.plan.live === undefined && !result.success) return
 						yield* Effect.sleep(100)
 					}
-				})
+				}).pipe(Effect.provideService(RpcPriority, "background"))
 					const maintenance = retention === undefined ? Effect.never : Effect.gen(function* () {
 						if (options.plan.history === undefined) yield* applyRetention(startupHead, true).pipe(Effect.catch((error) => publishStatus({ error })))
 						for (;;) {
@@ -749,15 +783,36 @@ export const defineModel = <P, Outputs extends Readonly<Record<string, unknown>>
 							if (progress !== null) yield* applyRetention(progress).pipe(Effect.catch((error) => publishStatus({ error })))
 						}
 					})
+					const progressWatch = Effect.suspend(() => {
+						let last = applied?.hash, changedAt = Date.now()
+						return Effect.forever(Effect.gen(function* () {
+							yield* Effect.sleep(1000)
+							if (last !== applied?.hash) { last = applied?.hash; changedAt = Date.now() }
+							const currentStatus = yield* SubscriptionRef.get(status)
+							const stalled = head !== null && applied !== null && head.number > applied.number && Date.now() - changedAt >= 3000
+							const ownError = currentStatus.error?.stage === "source" && typeof currentStatus.error.cause === "string" && currentStatus.error.cause.startsWith("Live indexing stalled:")
+							if (stalled && (currentStatus.error === null || ownError)) yield* publishStatus({ live: "recovering",
+								error: modelFailure("source", `Live indexing stalled: applied ${String(applied?.number)}, observed head ${String(head?.number)}`) })
+							else if (!stalled && ownError) yield* publishStatus({ live: "following", error: null })
+						}))
+					})
 					if (options.plan.live === undefined) yield* history
 					else yield* Effect.all([
 						history,
 						liveLogs,
-						maintenance,
+						progressWatch,
+						maintenance.pipe(Effect.provideService(RpcPriority, "background")),
 						Effect.forever(Effect.gen(function* () {
 							const pending = yield* Queue.takeBetween(queue, 1, 32)
-							yield* liveGroup(pending).pipe(
-								Effect.retry({ times: 3, schedule: Schedule.exponential(100), while: (error) => error.stage === "source" }))
+							let batch: BlockLogBatch[] = []
+							for (const update of pending) {
+								if ("revert" in update) {
+									if (batch.length) yield* liveGroup(batch)
+									batch = []
+									yield* recover(update.revert.number + 1n, update.revert)
+								} else batch.push(update)
+							}
+							if (batch.length) yield* liveGroup(batch).pipe(Effect.retry({ times: 3, schedule: Schedule.exponential(100), while: error => error.stage === "source" }))
 						})),
 				], { concurrency: "unbounded", discard: true })
 			})).pipe(Effect.tapCause((cause) => Cause.hasInterruptsOnly(cause) ? Effect.void : publishStatus({ live: "failed", error: modelFailure("running", cause) })), Effect.ensuring(Effect.sync(() => { running = false })))
