@@ -29,7 +29,7 @@ test('viem eth_call requests use the EvmClient call path', async () => {
   assert.deepEqual(calls, [{ transaction: { to: `0x${'11'.repeat(20)}`, data: '0xabcdef' }, block: 'latest' }])
 })
 
-test('viem newHeads subscriptions fetch every missed block as a header', async () => {
+test('viem newHeads subscriptions use complete shared blocks without fetching again', async () => {
   const hash = value => `0x${value.repeat(64)}`
   const address = `0x${'11'.repeat(20)}`
   const block = number => ({
@@ -41,7 +41,7 @@ test('viem newHeads subscriptions fetch every missed block as a header', async (
   const fetched = []
   const client = {
     isClosed: false,
-    blocks: Stream.fromIterable([{ number: 10n }, { number: 13n }]),
+    watchBlocks: () => Stream.fromIterable([10n,11n,12n,13n].map(number => ({block:block(number)}))),
     fetch(request) { fetched.push(request); return Effect.succeed(block(request.params[0])) },
   }
   const numbers = []
@@ -56,5 +56,19 @@ test('viem newHeads subscriptions fetch every missed block as a header', async (
     })
   })
   assert.deepEqual(numbers, ['0xa', '0xb', '0xc', '0xd'])
-  assert.deepEqual(fetched.map(request => request.params), [[10n, false], [11n, false], [12n, false], [13n, false]])
+  assert.deepEqual(fetched, [])
+})
+
+
+test('viem log subscriptions filter the shared stream and emit removed logs on reverts', async () => {
+ const address='0x'+'11'.repeat(20), hash=n=>'0x'+n.toString(16).padStart(64,'0')
+ const log=(number,h)=>({address,topics:[hash(1)],data:'0x',transactionHash:hash(99),transactionIndex:0n,logIndex:0n,blockNumber:number,blockHash:h,removed:false})
+ const client={isClosed:false,fetch:()=>{throw new Error('Subscription must not fetch')},watchChain:()=>Stream.fromIterable([
+  {kind:'apply',value:{number:10n,logs:[log(10n,hash(10))]}},
+  {kind:'revert',from:10n},
+  {kind:'apply',value:{number:10n,logs:[log(10n,hash(110))]}},
+ ])}
+ const values=[]
+ await new Promise(async(resolve,reject)=>{await viemTransport(client)().value.subscribe({params:['logs',{address}],onData:({result})=>{values.push(result);if(values.length===3)resolve()},onError:reject})})
+ assert.deepEqual(values.map(value=>[value.blockHash,value.removed]),[[hash(10),false],[hash(10),true],[hash(110),false]])
 })

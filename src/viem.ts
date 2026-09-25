@@ -1,3 +1,5 @@
+import { matchesLog } from "./rpc/watch.js"
+import { RpcPriority, type RequestPriority } from "./rpc/priority.js"
 import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
 import type { EvmClient, EvmClientError, HedgeableRpcMethodName } from "./rpc/client.js"
 import type { CallError } from "./rpc/multicall.js"
@@ -147,8 +149,8 @@ const requestRawTransaction = (
 	)
 }
 
-function request<ReturnType = unknown>(client: EvmClient, input: ViemRequest, options?: unknown): Promise<ReturnType>
-function request(client: EvmClient, input: ViemRequest, options?: unknown): Promise<unknown> {
+function request<ReturnType = unknown>(client: EvmClient, input: ViemRequest, options?: unknown, priority?: RequestPriority): Promise<ReturnType>
+function request(client: EvmClient, input: ViemRequest, options?: unknown, priority: RequestPriority = "live"): Promise<unknown> {
 	if (input.method !== "eth_sendRawTransaction" && !isHedgeableMethod(input.method)) {
 		return Promise.reject(unsupported(input.method))
 	}
@@ -156,8 +158,8 @@ function request(client: EvmClient, input: ViemRequest, options?: unknown): Prom
 	const signal = options !== null && typeof options === "object" && "signal" in options && options.signal instanceof AbortSignal
 		? options.signal : undefined
 	if (input.method === "eth_sendRawTransaction") return runEffect(requestRawTransaction(client, input.params), signal)
-	if (input.method === "eth_call") return runEffect(requestCall(client, input.params), signal)
-	return runEffect(requestPublic(client, input.method, input.params), signal)
+	if (input.method === "eth_call") return runEffect(requestCall(client, input.params).pipe(Effect.provideService(RpcPriority, priority)), signal)
+	return runEffect(requestPublic(client, input.method, input.params).pipe(Effect.provideService(RpcPriority, priority)), signal)
 }
 
 const encodeBlock = (block: RpcBlock): Effect.Effect<unknown, Schema.SchemaError> =>
@@ -168,26 +170,8 @@ const encodeLog = (log: RpcLog): Effect.Effect<unknown, Schema.SchemaError> =>
 		Effect.map((logs) => logs[0]),
 	)
 
-function* blockRange(start: bigint, end: bigint): Generator<bigint> {
-	for (let number = start; number <= end; number++) yield number
-}
-
-const catchUpBlocks = (client: EvmClient): Stream.Stream<RpcBlock, EvmClientError | ViemAdapterError> => Stream.suspend(() => {
-	let previous: bigint | undefined
-	return client.blocks.pipe(
-		Stream.map((head) => {
-			const start = previous === undefined ? head.number : previous + 1n
-			previous = head.number > (previous ?? -1n) ? head.number : previous
-			return blockRange(start, head.number)
-		}),
-		Stream.flattenIterable,
-		Stream.mapEffect((number) => client.fetch({ method: "eth_getBlockByNumber", params: [number, false] }).pipe(
-			Effect.flatMap((block) => block === null
-				? Effect.fail(new ViemAdapterError(`Block ${String(number)} is unavailable`, { code: -32001 }))
-				: Effect.succeed(block)),
-		)),
-	)
-})
+const catchUpBlocks = (client: EvmClient): Stream.Stream<RpcBlock> =>
+	client.watchBlocks({ full: true }).pipe(Stream.map(value => value.block))
 
 const subscriptionStream = (
 	client: EvmClient,
@@ -208,10 +192,23 @@ const subscriptionStream = (
 			if (!isRpcFilter(filter)) return Stream.fail(unsupported("eth_subscribe:logs"))
 			const liveFilter: RpcLogFilter = { ...(filter.address === undefined ? {} : { address: filter.address }),
 				...(filter.topics === undefined ? {} : { topics: filter.topics }) }
-			return catchUpBlocks(client).pipe(Stream.flatMap((block) => client.fetch({
-				method: "eth_getLogs",
-				params: [{ ...liveFilter, blockHash: block.hash }],
-			}).pipe(Stream.fromEffect, Stream.flattenIterable, Stream.mapEffect(encodeLog))))
+			return Stream.suspend(() => {
+				const retained = new Map<bigint, readonly RpcLog[]>()
+				return client.watchChain().pipe(Stream.map(update => {
+					if (update.kind === "apply") {
+						const logs = update.value.logs.filter(log => matchesLog(log, liveFilter))
+						retained.set(update.value.number, logs)
+						while (retained.size > 128) { const first = retained.keys().next(); if (!first.done) retained.delete(first.value) }
+						return logs
+					}
+					const removed: RpcLog[] = []
+					for (const [number, logs] of retained) if (number >= update.from) {
+						removed.push(...logs.map(log => ({ ...log, removed: true })))
+						retained.delete(number)
+					}
+					return removed
+				}), Stream.flattenIterable, Stream.mapEffect(encodeLog))
+			})
 		}
 		return Stream.fail(unsupported(`eth_subscribe:${decoded.params[0]}`))
 	}))
@@ -233,8 +230,8 @@ const subscribe = async (client: EvmClient, subscription: ViemSubscription): Pro
 	return { unsubscribe: () => { controller.abort() } }
 }
 
-export const viemTransport = (client: EvmClient): EvmClientViemTransport => () => {
-	const requestClient: ViemRequestFunction = (input, options) => request(client, input, options)
+export const viemTransport = (client: EvmClient, settings?: { readonly priority?: RequestPriority }): EvmClientViemTransport => () => {
+	const requestClient: ViemRequestFunction = (input, options) => request(client, input, options, settings?.priority)
 	return {
 		config: {
 			key: "ether-state",

@@ -15,10 +15,19 @@ export const readContext = (client: EvmClient, block: IndexedBlock): ReadContext
 	read: (transaction) => client.call({ transaction, block: { blockHash: block.hash, requireCanonical: true } })
 		.pipe(Effect.mapError((cause) => modelFailure("source", cause))),
 })
+export interface SourceCaptureContext {
+	readonly block: IndexedBlock
+	readonly logs: readonly RpcLog[]
+	readonly range?: {
+		readonly from: IndexedBlock
+		readonly through: IndexedBlock
+		readonly logs: readonly RpcLog[]
+	}
+}
 export interface LogSource<A> {
 	readonly name: string
 	readonly filter: RpcLogFilter
-	readonly capture: (logs: readonly RpcLog[]) => Effect.Effect<readonly unknown[], ModelFailure>
+	readonly capture: (logs: readonly RpcLog[], block?: IndexedBlock, range?: SourceCaptureContext["range"]) => Effect.Effect<readonly unknown[], ModelFailure>
 	readonly decode: (values: readonly unknown[]) => Effect.Effect<readonly A[], ModelFailure>
 }
 export const Source: {
@@ -26,16 +35,22 @@ export const Source: {
 		readonly name: string
 		readonly filter: RpcLogFilter
 		readonly schema: Schema.Codec<A>
-		readonly decode: (log: RpcLog) => Effect.Effect<A | null, unknown>
+		readonly decode: (log: RpcLog, context?: SourceCaptureContext) => Effect.Effect<A | null, unknown>
 	}) => LogSource<A>
 } = {
 	logs: (options) => {
 		const codec = Schema.toCodecJson(options.schema)
 		return {
 			name: options.name, filter: options.filter,
-			capture: (logs) => Effect.forEach(logs.filter((log) => matchesLog(log, options.filter)), (log) => options.decode(log)).pipe(
-				Effect.flatMap((values) => Effect.forEach(values.filter((value) => value !== null), (value) => Schema.encodeEffect(codec)(value))),
-				Effect.mapError((cause) => modelFailure("source", cause))),
+			capture: (logs, block, range) => {
+				const filtered = logs.filter((log) => matchesLog(log, options.filter))
+				const context = block === undefined ? undefined : { block, logs: filtered, ...(range === undefined ? {} : { range: {
+					...range, logs: range.logs.filter((log) => matchesLog(log, options.filter)),
+				} }) }
+				return Effect.forEach(filtered, (log) => options.decode(log, context)).pipe(
+					Effect.flatMap((values) => Effect.forEach(values.filter((value) => value !== null), (value) => Schema.encodeEffect(codec)(value))),
+					Effect.mapError((cause) => modelFailure("source", cause)))
+			},
 			decode: (values) => Effect.forEach(values, (value) => Schema.decodeUnknownEffect(codec)(value)).pipe(Effect.mapError((cause) => modelFailure("source", cause))),
 		}
 	},

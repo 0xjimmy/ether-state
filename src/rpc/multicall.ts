@@ -1,3 +1,4 @@
+import { RpcPriority } from "./priority.js"
 import { Effect, Exit, Schema } from "effect"
 import type { Scope } from "effect"
 import { BatchQueue } from "./transport/queue.js"
@@ -121,12 +122,14 @@ export class MulticallReads {
 	}) {}
 
 	request(read: ContractRead & { readonly block: RpcBlockReference; readonly blockNumber: bigint }): Effect.Effect<string, CallError> {
+		return Effect.gen({ self: this }, function* () {
+		const priority = yield* RpcPriority
 		if (!this.blockVerificationSupported || read.multicall === false || typeof read.transaction.to !== "string" || read.transaction.to.toLowerCase() === address.toLowerCase() ||
 			Object.keys(read.transaction).some((key) => key !== "to" && key !== "data" && key !== "input")) {
 			this.stats.singles++
-			return this.options.fetch(read.transaction, read.block)
+			return yield* this.options.fetch(read.transaction, read.block)
 		}
-		const key = JSON.stringify(read.block, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value)
+		const key = priority + JSON.stringify(read.block, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value)
 		let queue = this.groups.get(key)
 		if (queue === undefined) {
 			queue = new BatchQueue({ ...this.options, maxWeight: this.options.maxCalldataBytes,
@@ -135,12 +138,28 @@ export class MulticallReads {
 			this.groups.set(key, queue)
 		}
 		const selected = queue
-		return selected.request(read.transaction).pipe(Effect.ensuring(Effect.sync(() => {
+		return yield* selected.request(read.transaction).pipe(Effect.ensuring(Effect.sync(() => {
 			if (selected.size === 0 && this.groups.get(key) === selected) this.groups.delete(key)
 		})))
+		})
 	}
 
 	private run(calls: readonly RpcTransactionRequest[], block: RpcBlockReference, blockNumber: bigint): Effect.Effect<readonly Exit.Exit<string, CallError>[], CallError> {
+		const positions = new Map<string, number>()
+		const unique: RpcTransactionRequest[] = []
+		const indexes = calls.map((call) => {
+			const key = JSON.stringify(call, (_, value: unknown) => typeof value === "bigint" ? value.toString() : value)
+			const saved = positions.get(key)
+			if (saved !== undefined) return saved
+			const index = unique.length
+			positions.set(key, index)
+			unique.push(call)
+			return index
+		})
+		return this.runUnique(unique, block, blockNumber).pipe(Effect.map((results) => indexes.map((index) => results[index] ?? Exit.die("Missing deduplicated result"))))
+	}
+
+	private runUnique(calls: readonly RpcTransactionRequest[], block: RpcBlockReference, blockNumber: bigint): Effect.Effect<readonly Exit.Exit<string, CallError>[], CallError> {
 		const singles = () => {
 			this.stats.singles += calls.length
 			return Effect.forEach(calls, (call) => Effect.exit(this.options.fetch(call, block)), { concurrency: 4 })
@@ -168,7 +187,10 @@ export class MulticallReads {
 			}
 			return results.slice(0, calls.length).map(([success, data]): Exit.Exit<string, CallError> => success
 				? Exit.succeed(data) : Exit.fail<ContractReverted>({ _tag: "ContractReverted", data }))
-		}).pipe(Effect.catch(() => Effect.sync(() => { this.stats.fallbacks++ }).pipe(Effect.andThen(singles()))))
+		}).pipe(Effect.catch((error) => error._tag === "InvalidMulticall" || error._tag === "SchemaError" ||
+			(error._tag === "RpcError" && (error.code === 3 || /execution reverted/i.test(error.message)))
+			? Effect.sync(() => { this.stats.fallbacks++ }).pipe(Effect.andThen(singles()))
+			: Effect.fail(error)))
 	}
 }
 

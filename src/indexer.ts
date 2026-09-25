@@ -7,8 +7,8 @@ export type {
 } from "./indexer/index.js"
 
 export { Source, Projection } from "./indexer/model-definition.js"
-export type { LogSource, ReadContext, ProjectionContext } from "./indexer/model-definition.js"
+export type { LogSource, ReadContext, ProjectionContext, SourceCaptureContext } from "./indexer/model-definition.js"
 export { defineModel } from "./indexer/model.js"
-export type { ModelDefinition, ModelInstance, ModelOptions, ModelPlan, ModelStatus, ProjectionUpdate, SourceUpdate } from "./indexer/model.js"
+export type { ModelDefinition, ModelInstance, ModelOptions, ModelHistoryBatch, ModelPlan, ModelStatus, ProjectionUpdate, SourceUpdate } from "./indexer/model.js"
 export { memoryModelStore, missingRange } from "./indexer/model-store.js"
 export type { ModelStore, ModelFailure, ModelBatch, ModelCommit, BlockRange, ProjectionRow } from "./indexer/model-store.js"
