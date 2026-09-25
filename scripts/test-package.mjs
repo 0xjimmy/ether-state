@@ -29,6 +29,7 @@ for (const file of [
   'dist/esm/indexer-pglite.js', 'dist/esm/indexer-pglite.d.ts', 'dist/cjs/indexer-pglite.cjs',
   'dist/esm/indexer-libsql.js', 'dist/esm/indexer-libsql.d.ts', 'dist/cjs/indexer-libsql.cjs',
   'dist/esm/indexer-d1.js', 'dist/esm/indexer-d1.d.ts', 'dist/cjs/indexer-d1.cjs',
+  'dist/esm/indexer-postgres.js', 'dist/esm/indexer-postgres.d.ts', 'dist/cjs/indexer-postgres.cjs',
   'LICENSE', 'README.md'
 ]) {
   assert.ok(files.includes(file), `Missing package file: ${file}`)
@@ -45,7 +46,9 @@ await writeFile(path.join(directory, 'viem-esm.mjs'), "import { viemTransport } 
 await writeFile(path.join(directory, 'viem-cjs.cjs'), "const { viemTransport } = require('ether-state/viem'); if (typeof viemTransport !== 'function') throw new Error('Missing Viem adapter');\n")
 await writeFile(path.join(directory, 'indexer-esm.mjs'), "import { Indexer } from 'ether-state/indexer'; import { pgliteStore } from 'ether-state/indexer/pglite'; import { libsqlStore } from 'ether-state/indexer/libsql'; import { d1Store } from 'ether-state/indexer/d1'; if (![Indexer, pgliteStore, libsqlStore, d1Store].every(value => typeof value === 'function')) throw new Error('Missing indexer export');\n")
 await writeFile(path.join(directory, 'indexer-cjs.cjs'), "const core = require('ether-state/indexer'); const pg = require('ether-state/indexer/pglite'); const libsql = require('ether-state/indexer/libsql'); const d1 = require('ether-state/indexer/d1'); if (![core.Indexer, pg.pgliteStore, libsql.libsqlStore, d1.d1Store].every(value => typeof value === 'function')) throw new Error('Missing indexer export');\n")
-for (const file of ['esm.mjs', 'cjs.cjs', 'viem-esm.mjs', 'viem-cjs.cjs', 'indexer-esm.mjs', 'indexer-cjs.cjs']) run([file], directory)
+await writeFile(path.join(directory, 'postgres-esm.mjs'), "import { postgresModelStore } from 'ether-state/indexer/postgres'; if(typeof postgresModelStore !== 'function') throw new Error('Missing Postgres model store');\n")
+await writeFile(path.join(directory, 'postgres-cjs.cjs'), "const { postgresModelStore } = require('ether-state/indexer/postgres'); if(typeof postgresModelStore !== 'function') throw new Error('Missing Postgres model store');\n")
+for (const file of ['postgres-esm.mjs', 'postgres-cjs.cjs', 'esm.mjs' , 'cjs.cjs', 'viem-esm.mjs', 'viem-cjs.cjs', 'indexer-esm.mjs', 'indexer-cjs.cjs']) run([file], directory)
 const types = `import { EvmClient, getRpcEndpoints, getExplorers } from 'ether-state';
 import type { EvmClientConfig } from 'ether-state';
 import { viemTransport } from 'ether-state/viem';

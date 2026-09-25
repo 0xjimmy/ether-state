@@ -234,3 +234,25 @@ three seconds. History errors remain separate from live progress.
 
 Viem head and log subscriptions use the same complete stream. Log subscriptions
 emit removed logs after a shared revert. They do not query live logs separately.
+
+## PostgreSQL model storage
+
+`ether-state/indexer/postgres` exports `postgresModelStore(database)`. Supply
+`query(sql, parameters)` and `transaction(callback)` methods. A query returns
+`{ rows }`. The transaction callback must use one connection and roll back on
+failure. Bind parameters; do not interpolate them into SQL. Configure finite
+statement and lock timeouts in the driver.
+
+The adapter uses the same `ether_model_blocks`, `ether_model_rows`, and
+`ether_model_coverage` tables as the PGlite model store. The caller creates the
+schema explicitly before opening the adapter. Opening a Postgres model store
+performs no DDL or legacy coverage conversion. The PGlite wrapper retains its
+existing initialization behavior.
+
+Stores using the same database object share writer claims and serialize mutations
+for each model identity. The caller must also enforce ownership across processes,
+for example with a database advisory lock held for the backend lifetime. An
+in-memory claim does not replace that lock. Stop work if ownership is lost.
+
+The indexer still accepts any implementation of `ModelStore`; this adapter does
+not require other storage implementations to use PostgreSQL or SQL.

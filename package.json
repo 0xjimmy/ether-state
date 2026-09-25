@@ -105,7 +105,17 @@
         "default": "./dist/cjs/indexer-d1.cjs"
       }
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./indexer/postgres": {
+      "import": {
+        "types": "./dist/esm/indexer-postgres.d.ts",
+        "default": "./dist/esm/indexer-postgres.js"
+      },
+      "require": {
+        "types": "./dist/esm/indexer-postgres.d.ts",
+        "default": "./dist/cjs/indexer-postgres.cjs"
+      }
+    }
   },
   "sideEffects": false,
   "publishConfig": {
