@@ -12,6 +12,7 @@ export type ReadFailurePolicy = "retry" | "rotate" | "unsupported" | "stop"
 /** Classify expected failures. Request encoding is validated before routing. */
 export const readFailurePolicy = (error: CallError | Schema.SchemaError): ReadFailurePolicy => {
 	switch (error._tag) {
+		case "DispatchDeclined": return "stop"
 		case "BlockUnavailable":
 		case "EndpointRequestTimeout":
 		case "WsRequestTimeout":

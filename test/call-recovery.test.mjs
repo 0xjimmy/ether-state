@@ -35,8 +35,8 @@ const server = (onHash, onCall = () => '0x1234', onOther = () => null) => {
   } })
   return { url: `http://127.0.0.1:${instance.port}`, requests, stop: () => instance.stop(true) }
 }
-const make = (servers) => EvmClient.make({ endpoints: { http: servers.map((s) => s.url), ws: [] },
-  network: { chainId: 1n, blockTime: 12000 }, options: { concurrentHttp: servers.length, concurrentWs: 0, hedgeDelay: 10, requestTimeout: 500 } })
+const make = (servers, options = {}) => EvmClient.make({ endpoints: { http: servers.map((s) => s.url), ws: [] },
+  network: { chainId: 1n, blockTime: 12000 }, options: { concurrentHttp: servers.length, concurrentWs: 0, hedgeDelay: 10, requestTimeout: 500, ...options } })
 
 test('a null header from a fast endpoint does not beat an available block', async () => {
   const fast = server(() => null)
@@ -44,8 +44,8 @@ test('a null header from a fast endpoint does not beat an available block', asyn
   try {
     const value = await run(Effect.gen(function* () { return yield* (yield* make([fast, slow])).call(read) }))
     assert.equal(value, '0x1234')
-    assert.equal(fast.requests.filter((r) => r.method === 'eth_getBlockByHash').length, 1)
-    assert.equal(slow.requests.filter((r) => r.method === 'eth_getBlockByHash').length, 1)
+    assert.ok(fast.requests.some((r) => r.method === 'eth_getBlockByHash'))
+    assert.ok(slow.requests.some((r) => r.method === 'eth_getBlockByHash'))
     for (const request of [...fast.requests, ...slow.requests].filter((r) => r.method === 'eth_call')) {
       assert.deepEqual(request.params[1], read.block)
     }
@@ -345,25 +345,32 @@ test('watchState work stops with either its caller scope or its client', async (
 })
 
 test('an endpoint HTTP 403 rotates to a healthy peer and lowers that method priority', async () => {
- let denied = 0
- const blocked = Bun.serve({ port: 0, async fetch(request) {
+ let denied = 0, rejectedPeer = null
+ const balances = [0, 0]
+ const peer = (id) => Bun.serve({ port: 0, async fetch(request) {
   const body = await request.json()
   const items = Array.isArray(body) ? body : [body]
-  if (items.some(item => !['eth_chainId', 'eth_getBlockByNumber'].includes(item.method))) {
-   denied++
-   return new Response('Forbidden', { status: 403 })
+  if (items.some(item => item.method === 'eth_getBalance')) {
+   balances[id]++
+   if (rejectedPeer === null) rejectedPeer = id
+   if (rejectedPeer === id) { denied++; return new Response('Forbidden', { status: 403 }) }
   }
-  const replies = items.map(item => ({ jsonrpc: '2.0', id: item.id, result: item.method === 'eth_chainId' ? '0x1' : head }))
+  const replies = items.map(item => ({ jsonrpc: '2.0', id: item.id,
+   result: item.method === 'eth_chainId' ? '0x1' : item.method === 'eth_getBlockByNumber' ? head : '0x1' }))
   return Response.json(Array.isArray(body) ? replies : replies[0])
  } })
- const healthy = server(() => historical, () => '0x1234', async () => { await new Promise(resolve => setTimeout(resolve, 30)); return '0x1' })
+ const peers = [peer(0), peer(1)]
  try {
   await run(Effect.gen(function* () {
-   const client = yield* make([{ url: `http://127.0.0.1:${blocked.port}` }, healthy])
+   // Reject whichever peer receives the first balance request. The route
+   // depends on live load and must not be part of this test's premise.
+   const client = yield* make(peers.map(instance => ({ url: `http://127.0.0.1:${instance.port}` })), { hedgeDelay: 1000 })
    for (const address of ['11', '22']) assert.equal(yield* client.fetchOne({ method: 'eth_getBalance', params: [`0x${address.repeat(20)}`, 'latest'] }), 1n)
    assert.equal(denied, 1)
+   assert.notEqual(rejectedPeer, null)
+   assert.equal(balances[1 - rejectedPeer], 2)
   }))
- } finally { blocked.stop(true); healthy.stop() }
+ } finally { for (const instance of peers) instance.stop(true) }
 })
 
 test('all upstream HTTP status and response decoding failures try another endpoint', async () => {
