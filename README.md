@@ -62,13 +62,13 @@ A nonzero bloom requires logs in an unfiltered result; this check does not prove
 
 `watchCall` and `watchState` pin reads to the reported block hash with `requireCanonical: true`.
 They keep the newest pending head while an existing read completes. These are latest-state watches, not a read for every block.
-Transient failures resume on the current head. `watchState` exposes `Retrying` and `Failed`, with the previous value when available.
+Temporary provider failures resume on the current head. `watchState` stays `Loading` until its first valid value, then keeps that value in `Ready` during recovery. Invalid application data and contract reverts remain explicit errors.
 A requested historical call never silently changes its block reference.
 
 ### Request recovery and progress
 
 Idempotent reads, block polling, log fetching, and historical fetches use the same internal request policy.
-Each physical RPC read has at most two concurrent attempts and a total `requestTimeout` budget.
+Each internal RPC recovery round has at most two concurrent attempts and a total `requestTimeout` budget.
 The attempt limit is at least four and expands to cover the verified eligible endpoints. Untried endpoints take priority over repeated attempts.
 Endpoint queue time is part of that budget. A high-level operation can require several physical reads.
 Writes such as transaction submission do not use this retry policy.
@@ -77,7 +77,9 @@ The client ranks eligible endpoints by measured valid-response time, load, coold
 HTTP standbys can serve reads after a selected endpoint fails. Connected WebSocket endpoints remain a fallback for reads.
 Successful responses cancel losing attempts. Unsupported methods and log-range restrictions are remembered.
 HTTP batches learn reported item limits and split future batches. Rate limits reduce endpoint throughput, followed by gradual recovery. The affected method prefers other endpoints for 30 seconds, so one expensive method does not repeatedly exhaust the same provider.
-Upstream HTTP errors, invalid responses, remote parameter rejections, and unknown provider errors retry or rotate before reaching a consumer. Rotated failures lower that endpoint's method priority for 60 seconds. Local request encoding errors and valid contract reverts remain terminal. If the deadline or attempt budget expires, the client returns the last typed failure.
+Public reads retry temporary failures across recovery rounds until they succeed or the caller cancels. Each round can hedge and rotate endpoints. A delay between rounds increases from 100 ms to at most one second. Rotated failures lower that endpoint's method priority for 60 seconds. An HTTP 403 does not permanently disable receipt requests. Live acquisition can use logs while receipt requests are unavailable.
+
+Local request encoding errors and valid contract reverts remain terminal. Explicit unsupported-method errors and log-range limits reach the capability fallback or range-splitting code. Use Effect interruption, a caller timeout, or client close to cancel a pending read. `requestTimeout` bounds one internal recovery round, not the total public read duration.
 
 Head discovery runs independently of log catch-up:
 

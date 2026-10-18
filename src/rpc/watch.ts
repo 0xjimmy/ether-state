@@ -34,7 +34,9 @@ export interface WatchCallOptions<A> extends Omit<ContractRead, "block"> {
 	readonly equals?: (left: A, right: A) => boolean
 }
 
-export const callChanges = <A>(client: EvmClient, options: WatchCallOptions<A>,
+type WatchClient = { readonly watchBlocks: () => Stream.Stream<BlockHead>; readonly call: EvmClient["call"] }
+
+export const callChanges = <A>(client: WatchClient, options: WatchCallOptions<A>,
 	onFailure: (error: CallError | Schema.SchemaError) => Effect.Effect<void> = () => Effect.void,
 ): Stream.Stream<WatchedCall<A>, CallError | Schema.SchemaError> =>
 	client.watchBlocks().pipe(Stream.filter((block): block is BlockHead & { readonly hash: string } => block.hash !== null),
@@ -47,16 +49,15 @@ export const callChanges = <A>(client: EvmClient, options: WatchCallOptions<A>,
 		Stream.retry(($) => $(Schedule.spaced(500)).pipe(Schedule.while(({ input }) => shouldResumeWatch(input)))),
 		Stream.changesWith((a, b) => options.equals?.(a.value, b.value) ?? false))
 
-export const makeWatchedState = <A>(client: EvmClient, options: WatchCallOptions<A>): Effect.Effect<{
+export const makeWatchedState = <A>(client: WatchClient, options: WatchCallOptions<A>): Effect.Effect<{
 	readonly current: Effect.Effect<WatchedState<A>>
 	readonly changes: Stream.Stream<WatchedState<A>>
 }, never, Scope.Scope> => Effect.gen(function* () {
 	const state = yield* SubscriptionRef.make<WatchedState<A>>({ _tag: "Loading" })
 	let previous: WatchedCall<A> | undefined
 
-	yield* callChanges(client, options, (error) => SubscriptionRef.set(state, {
-		_tag: shouldResumeWatch(error) ? "Retrying" : "Failed", error, previous,
-	})).pipe(Stream.runForEach((current) => {
+	yield* callChanges(client, options, (error) => shouldResumeWatch(error) ? Effect.void :
+		SubscriptionRef.set(state, { _tag: "Failed", error, previous })).pipe(Stream.runForEach((current) => {
 		previous = current
 		return SubscriptionRef.set(state, { _tag: "Ready", current })
 	}), Effect.catch(() => Effect.void), Effect.forkScoped)

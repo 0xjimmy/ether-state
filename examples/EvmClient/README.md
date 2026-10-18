@@ -24,7 +24,7 @@ bun examples/EvmClient/watch-blocks.ts
 
 `latencyMs` is local receive time minus block timestamp, not HTTP round-trip time.
 
-`watchCall` reads a contract on new blocks. `watchState` exposes Loading, Ready, and Retrying state through a SubscriptionRef. These features still need broader recovery tests; reorg handling is not complete.
+`watchCall` reads a contract on new blocks. `watchState` stays Loading until its first valid value. It keeps the last valid value in Ready during temporary provider failures. Recovery resumes on the current head.
 
 ## Historical data
 

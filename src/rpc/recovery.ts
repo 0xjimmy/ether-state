@@ -1,3 +1,4 @@
+import { Effect } from "effect"
 import type { Schema } from "effect"
 import type { CallError } from "./multicall.js"
 
@@ -42,5 +43,18 @@ export const readFailurePolicy = (error: CallError | Schema.SchemaError): ReadFa
 	}
 }
 
-export const shouldResumeWatch = (error: CallError | Schema.SchemaError): boolean => readFailurePolicy(error) === "retry" ||
-	(error._tag === "RpcError" && historicalStateUnavailable.test(error.message))
+/** A request budget bounds one recovery round, not the caller's whole read. */
+export const recoverRead = <A, E extends CallError | Schema.SchemaError, R>(attempt: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+	Effect.suspend(() => {
+		let failures = 0
+		const retry: Effect.Effect<A, E, R> = attempt.pipe(Effect.catch((error) => {
+			const policy = readFailurePolicy(error)
+			// These errors belong to validation, capability fallback, or range splitting.
+			if (policy === "stop" || policy === "unsupported" || isLogRangeLimit(error)) return Effect.fail(error)
+			return Effect.sleep(Math.min(1_000, 100 * 2 ** Math.min(failures++, 4))).pipe(Effect.andThen(Effect.suspend(() => retry)))
+		}))
+		return retry
+	})
+
+export const shouldResumeWatch = (error: CallError | Schema.SchemaError): boolean =>
+	error._tag !== "SchemaError" && readFailurePolicy(error) !== "stop"

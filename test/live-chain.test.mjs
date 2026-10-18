@@ -110,7 +110,7 @@ test('receipt support is learned per endpoint and does not disable capable peers
   expect(counts.capable).toBe(3)
   expect(counts.logs).toBe(0)
   const endpoints=yield* client.endpoints
-  expect(endpoints.get(`http://127.0.0.1:${a.port}`)?.unsupportedMethods).toContain('eth_getBlockReceipts')
+  expect(endpoints.get(`http://127.0.0.1:${a.port}`)?.unsupportedMethods ?? []).not.toContain('eth_getBlockReceipts')
  })).pipe(Effect.provide([FetchHttpClient.layer,Socket.layerWebSocketConstructorGlobal]),
   Effect.provideService(References.MinimumLogLevel,'None')))}finally{a.stop(true);b.stop(true)}
 },12000)
@@ -142,8 +142,8 @@ test('failed method observations move later reads to a proven peer', async () =>
   Effect.provideService(References.MinimumLogLevel,'None')))}finally{a.stop(true);b.stop(true)}
 },12000)
 
-test('all 403 receipt peers fall back to logs without repeated receipt probes', async () => {
- const counts={receipts:0,logs:0}
+test('403 receipt failure uses logs and receipt reads recover later', async () => {
+ const counts={receipts:0,logs:0};let allowReceipts=false
  const full=n=>({hash:hash(n),parentHash:hash(n-1),number:'0x'+n.toString(16),timestamp:'0x64',
   sha3Uncles:hash(0),miner:'0x'+'00'.repeat(20),stateRoot:hash(0),transactionsRoot:hash(0),
   receiptsRoot:hash(0),logsBloom:'0x'+'00'.repeat(256),gasLimit:'0x1',gasUsed:'0x0',extraData:'0x',
@@ -151,7 +151,8 @@ test('all 403 receipt peers fall back to logs without repeated receipt probes', 
  const server=Bun.serve({port:0,async fetch(request){const {id,method,params}=await request.json()
   if(method==='eth_getBlockReceipts'){
    counts.receipts++
-   return Response.json({jsonrpc:'2.0',id,error:{code:-32601,message:'rpc method is unsupported'}},{status:403})
+   return allowReceipts ? Response.json({jsonrpc:'2.0',id,result:[]})
+    : Response.json({jsonrpc:'2.0',id,error:{code:-32000,message:'temporarily forbidden'}},{status:403})
   }
   if(method==='eth_getLogs')counts.logs++
   return Response.json({jsonrpc:'2.0',id,result:method==='eth_chainId'?'0x1':
@@ -161,12 +162,15 @@ test('all 403 receipt peers fall back to logs without repeated receipt probes', 
   const client=yield* EvmClient.make({network:{chainId:1n,blockTime:100000},
    endpoints:{http:[`http://127.0.0.1:${server.port}`],ws:[]},
    options:{concurrentHttp:1,concurrentWs:0,maxRequestsPerSecond:1000}})
-  for(const n of [100n,101n]){
+  for(const n of [100n,101n,102n]){
    const value=yield* client.loadLiveBlock(n)
    expect(value.number).toBe(n)
-   expect(value.receipts).toBeNull()
+   if(n===100n){expect(value.receipts).toBeNull();allowReceipts=true}
+   else expect(value.receipts).toEqual([])
   }
-  expect(counts).toEqual({receipts:1,logs:2})
+  expect(counts).toEqual({receipts:3,logs:1})
+  const endpoint=(yield* client.endpoints).get(`http://127.0.0.1:${server.port}`)
+  expect(endpoint.unsupportedMethods ?? []).not.toContain("eth_getBlockReceipts")
  })).pipe(Effect.provide([FetchHttpClient.layer,Socket.layerWebSocketConstructorGlobal]),
   Effect.provideService(References.MinimumLogLevel,'None')))}finally{server.stop(true)}
 },12000)

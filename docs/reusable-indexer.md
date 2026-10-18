@@ -204,7 +204,7 @@ See [the runnable examples](../examples/indexer/README.md) for live memory track
 
 See [the cleanup and tick-window checks](../bench/results/indexer-cleanup-2026-09-20/README.md) for current validation and live traces.
 
-Upstream recovery stays in EvmClient. HTTP failures, response decoding failures, and provider parameter rejections do not stop a logical read before the client tries its recovery policy. Contract reverts and local encoding failures are terminal. An origin resolver receives an upstream failure only after the client exhausts its attempt or time budget. A blocked origin still needs a new run after an unrecoverable failure.
+Upstream recovery stays in EvmClient. Public reads retry temporary HTTP failures, response decoding failures, and provider parameter rejections across internal recovery rounds. An exhausted round does not fail the public read. Cancellation and client close stop recovery. Contract reverts and local encoding failures remain terminal. Explicit unsupported-method errors and log-range limits reach their fallback handlers. A blocked origin still needs a new run after an unrecoverable failure.
 
 
 ## Shared live chain acquisition

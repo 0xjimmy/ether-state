@@ -1,11 +1,48 @@
 import { makeLifetime } from "../src/internal/lifetime.ts"
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'
-import { Effect, Stream } from 'effect'
+import { Effect, Stream, SubscriptionRef } from 'effect'
 import { EvmClient } from '../src/index.ts'
 import { callChanges, makeWatchedState } from '../src/rpc/watch.ts'
 
 const head = (hash) => ({ number: 10n, hash, parentHash: 'parent', timestamp: 1n, logsBloom: '0x00', observedAt: 1000 })
+
+test('recovery policy: a provider rejection does not fail the watch', async () => {
+  let attempts = 0
+  const client = {
+    watchBlocks: () => Stream.make(head('hash')),
+    call: () => Effect.suspend(() => ++attempts === 1
+      ? Effect.fail({ _tag: 'RpcError', code: -32000, message: 'temporary provider rejection' }) : Effect.succeed('ok')),
+  }
+  const result = await Effect.runPromise(callChanges(client, { transaction: {}, decode: Effect.succeed }).pipe(
+    Stream.take(1), Stream.runCollect, Effect.timeout('2 seconds')))
+  assert.equal(result[0].value, 'ok')
+  assert.equal(attempts, 2)
+})
+
+test('recovery policy: a watch keeps its last valid value throughout recovery', async () => {
+  await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const heads = yield* SubscriptionRef.make(head('old'))
+    let rejected = false
+    const client = {
+      watchBlocks: () => SubscriptionRef.changes(heads),
+      call: (read) => Effect.suspend(() => {
+        if (read.block.blockHash === 'new' && !rejected) {
+          rejected = true
+          return Effect.fail({ _tag: 'RpcError', code: -32000, message: 'temporary rejection' })
+        }
+        return Effect.succeed(read.block.blockHash)
+      }),
+    }
+    const state = yield* makeWatchedState(client, { transaction: {}, decode: Effect.succeed })
+    while ((yield* state.current)._tag !== 'Ready') yield* Effect.sleep(5)
+    yield* SubscriptionRef.set(heads, head('new'))
+    while (!rejected) yield* Effect.sleep(5)
+    assert.equal((yield* state.current)._tag, 'Ready')
+    assert.equal((yield* state.current).current.value, 'old')
+    yield* state.changes.pipe(Stream.filter(value => value._tag === 'Ready' && value.current.value === 'new'), Stream.take(1), Stream.runDrain)
+  })).pipe(Effect.timeout('2 seconds')))
+})
 
 test('watched calls pin competing heads at the same height to their hashes', async () => {
   const reads = []
@@ -89,7 +126,7 @@ test('call watches do not retry contract reverts', async () => {
   assert.equal(attempts, 1)
 })
 
-test('watched state reports retrying then ready without caller intervention', async () => {
+test('watched state keeps recovery internal until ready', async () => {
   let attempts = 0
   const client = {
     watchBlocks: () => Stream.make(head('hash')),
@@ -97,8 +134,8 @@ test('watched state reports retrying then ready without caller intervention', as
   }
   await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
     const state = yield* makeWatchedState(client, { transaction: {}, decode: Effect.succeed })
-    const states = yield* state.changes.pipe(Stream.filter((s) => s._tag !== 'Loading'), Stream.take(2), Stream.runCollect)
-    assert.deepEqual(states.map((s) => s._tag), ['Retrying', 'Ready'])
+    const states = yield* state.changes.pipe(Stream.filter((s) => s._tag !== 'Loading'), Stream.take(1), Stream.runCollect)
+    assert.deepEqual(states.map((s) => s._tag), ['Ready'])
   })).pipe(Effect.timeout('2 seconds')))
 })
 
