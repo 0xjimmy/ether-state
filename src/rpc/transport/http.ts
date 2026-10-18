@@ -1,21 +1,23 @@
+import { dispatchApproved, checkDispatch, type BeforeDispatch, type DispatchDeclined } from "./dispatch.js"
 import { Effect, Exit, Schema } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { HttpBody, HttpClientError } from "effect/unstable/http"
 import { getRpcMethod, type HttpRpcMethodName, type RpcError, type RpcMethod, type RpcParams, type RpcResult } from "../schema.js"
 import type { Scope } from "effect"
 import { BatchQueue, type QueueFull } from "./queue.js"
 
-export type RpcHttpError = RpcError | Schema.SchemaError | HttpBody.HttpBodyError | HttpClientError.HttpClientError | QueueFull
+export type RpcHttpError = DispatchDeclined | RpcError | Schema.SchemaError | HttpBody.HttpBodyError | HttpClientError.HttpClientError | QueueFull
 
 export interface EthHttpRpcOptions<Method extends HttpRpcMethodName> {
 	readonly method: Method
 	readonly endpoint: string
 	readonly inputParams: RpcParams<Method>
+	readonly beforeDispatch?: BeforeDispatch | undefined
 	readonly batch?: HttpBatcher
 }
 
 const execute = <Method extends string, Params, ParamsEncoded, Result, ResultEncoded>(
-	options: { readonly endpoint: string; readonly inputParams: Params; readonly batch?: HttpBatcher },
+	options: { readonly endpoint: string; readonly inputParams: Params; readonly batch?: HttpBatcher; readonly beforeDispatch?: BeforeDispatch | undefined },
 	definition: RpcMethod<Method, Params, ParamsEncoded, Result, ResultEncoded>,
 ): Effect.Effect<Result, RpcHttpError, HttpClient.HttpClient> => Effect.gen(function* () {
 	if (options.batch !== undefined) {
@@ -28,7 +30,22 @@ const execute = <Method extends string, Params, ParamsEncoded, Result, ResultEnc
 	const request = yield* HttpClientRequest.post(options.endpoint).pipe(HttpClientRequest.schemaBodyJson(definition.request)({
 		jsonrpc: "2.0", method: definition.method, params: options.inputParams, id: 1,
 	}))
-	const response = yield* client.execute(request)
+	yield* checkDispatch(options.beforeDispatch)
+	const fetch = yield* FetchHttpClient.Fetch
+	const dispatch = { attempted: false, declined: false }
+	const guardedFetch: typeof globalThis.fetch = (input, init) => {
+		if (!dispatchApproved(options.beforeDispatch)) {
+			dispatch.declined = true
+			return Promise.reject(new Error("Raw transaction dispatch declined"))
+		}
+		dispatch.attempted = true
+		return fetch(input, init)
+	}
+	const response = yield* client.execute(request).pipe(
+		Effect.provideService(FetchHttpClient.Fetch, options.beforeDispatch === undefined ? fetch : guardedFetch),
+		Effect.catch((error): Effect.Effect<never, RpcHttpError> => dispatch.declined && !dispatch.attempted
+			? Effect.fail({ _tag: "DispatchDeclined" }) : Effect.fail(error)),
+	)
 	const decoded = yield* response.pipe(
 		HttpClientResponse.filterStatusOk,
 		Effect.flatMap(HttpClientResponse.schemaBodyJson(definition.response)),

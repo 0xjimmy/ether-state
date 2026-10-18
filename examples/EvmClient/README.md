@@ -24,7 +24,7 @@ bun examples/EvmClient/watch-blocks.ts
 
 `latencyMs` is local receive time minus block timestamp, not HTTP round-trip time.
 
-`watchCall` reads a contract on new blocks. `watchState` exposes Loading, Ready, and Retrying state through a SubscriptionRef. These features still need broader recovery tests; reorg handling is not complete.
+`watchCall` reads a contract on new blocks. `watchState` stays Loading until its first valid value. It keeps the last valid value in Ready during temporary provider failures. Recovery resumes on the current head.
 
 ## Historical data
 
@@ -39,3 +39,11 @@ Use `getBlocks`, `getLogs`, `getTransactions`, or `getReceipts` for collected re
 ## Defaults and setup
 
 `EvmClient.make({ network: { chainId: 1n } })` discovers endpoints from Chainlist and estimates block time from 32 blocks. Provide `endpoints` and a millisecond `blockTime` to skip those steps. Examples provide HTTP and WebSocket services through Effect layers.
+
+## Guard a raw transaction at dispatch
+
+`client.sendRawTransaction(raw, { beforeDispatch })` calls the synchronous guard after endpoint admission and cooldown, at each network attempt. Return `"approve"` to send or `"decline"` to stop that attempt. A thrown error also declines. Keep this callback fast and read only local state.
+
+`viemTransport(client, { beforeDispatch })` forwards the same guard for raw transactions. It does not run the guard for reads. With `FetchHttpClient`, the guard runs again at `fetch`, after HTTP middleware. A custom HTTP client must enforce any extra internal send queue itself. A disconnected WebSocket does not queue a guarded send for a later connection.
+
+`DispatchDeclined` means that the guard declined and no network attempt started. If any endpoint started a send, a later error remains uncertain. Retain the signed transaction and reconcile its hash before another action.

@@ -1,3 +1,4 @@
+import { dispatchApproved, type BeforeDispatch, type DispatchDeclined } from "./dispatch.js"
 import {
 	Deferred,
 	Effect,
@@ -29,7 +30,7 @@ export interface WsRequestTimeout {
 	readonly method: string
 }
 
-export type RpcWsError = RpcError | Schema.SchemaError | Socket.SocketError | WsRequestTimeout
+export type RpcWsError = DispatchDeclined | RpcError | Schema.SchemaError | Socket.SocketError | WsRequestTimeout
 
 export type WsConnectionState =
 	| { readonly _tag: "Connecting"; readonly attempt: number }
@@ -60,7 +61,8 @@ export interface WsState {
 	readonly notifications: Stream.Stream<WsNotification>
 	readonly request: <Method extends WsRpcMethodName>(options: {
 		readonly method: Method
-		readonly inputParams: RpcParams<Method>
+		readonly beforeDispatch?: BeforeDispatch | undefined
+	readonly inputParams: RpcParams<Method>
 	}) => Effect.Effect<RpcResult<Method>, RpcWsError>
 }
 
@@ -73,12 +75,14 @@ export interface MakeWsStateOptions {
 export interface EthWsRpcOptions<Method extends WsRpcMethodName> {
 	readonly method: Method
 	readonly state: WsState
+	readonly beforeDispatch?: BeforeDispatch | undefined
 	readonly inputParams: RpcParams<Method>
 }
 
 export interface EthWsRpcOnceOptions<Method extends WsRpcMethodName> {
 	readonly method: Method
 	readonly endpoint: string
+	readonly beforeDispatch?: BeforeDispatch | undefined
 	readonly inputParams: RpcParams<Method>
 	readonly requestTimeout?: number
 }
@@ -141,9 +145,11 @@ const failPending = (
 
 const makeRequest = <Method extends WsRpcMethodName>(options: {
 	readonly method: Method
+	readonly beforeDispatch?: BeforeDispatch | undefined
 	readonly inputParams: RpcParams<Method>
 	readonly endpoint: string
 	readonly writer: Socket.Writer
+	readonly guardedWrite: (request: string, guard: BeforeDispatch) => Effect.Effect<void, RpcWsError>
 	readonly pending: Ref.Ref<ReadonlyMap<RpcId, PendingRequest>>
 	readonly nextId: Ref.Ref<number>
 	readonly timeout: number
@@ -170,7 +176,7 @@ const makeRequest = <Method extends WsRpcMethodName>(options: {
 		fail: (error) => Deferred.fail(deferred, error).pipe(Effect.asVoid),
 	}
 	yield* Ref.update(options.pending, (requests) => new Map(requests).set(id, entry))
-	return yield* options.writer.write(request).pipe(
+	return yield* (options.beforeDispatch === undefined ? options.writer.write(request) : options.guardedWrite(request, options.beforeDispatch)).pipe(
 		Effect.andThen(Deferred.await(deferred)),
 		Effect.timeoutOrElse({
 			duration: options.timeout,
@@ -189,7 +195,19 @@ export const makeWsState = (
 ): Effect.Effect<WsState, never, Scope.Scope | Socket.WebSocketConstructor> => Effect.gen(function* () {
 	const stateScope = yield* Scope.make()
 	yield* Effect.addFinalizer(() => Scope.close(stateScope, Exit.void))
-	const socket = yield* Socket.makeWebSocket(options.endpoint, { openTimeout: options.requestTimeout ?? 10_000 })
+	const makeSocket = yield* Socket.WebSocketConstructor
+	let currentSocket: Socket.WebSocketLike | undefined
+	const socket = yield* Socket.fromWebSocket(Effect.acquireRelease(
+		Effect.sync(() => { const ws = makeSocket(options.endpoint); currentSocket = ws; return ws }),
+		(ws) => Effect.sync(() => { if (currentSocket === ws) currentSocket = undefined; ws.close(1000) }),
+	), { openTimeout: options.requestTimeout ?? 10_000 })
+	const guardedWrite = (request: string, guard: BeforeDispatch): Effect.Effect<void, RpcWsError> => Effect.suspend(() => {
+		const ws = currentSocket
+		if (ws?.readyState !== 1) return Effect.fail<RpcWsError>({ _tag: "RpcError", code: -32000, message: "WebSocket is not connected" })
+		if (!dispatchApproved(guard)) return Effect.fail<DispatchDeclined>({ _tag: "DispatchDeclined" })
+		try { ws.send(request); return Effect.void }
+		catch (cause) { return Effect.fail(new Socket.SocketError({ reason: new Socket.SocketWriteError({ cause }) })) }
+	})
 	const writer = yield* Scope.provide(socket.writer, stateScope)
 	const connection = yield* SubscriptionRef.make<WsConnectionState>({ _tag: "Connecting", attempt: 0 })
 	const notifications = yield* PubSub.unbounded<WsNotification>()
@@ -232,7 +250,9 @@ export const makeWsState = (
 			yield* Effect.sleep(Math.min(30_000, reconnectDelay * (2 ** Math.min(attempt, 6))))
 			return yield* supervise(attempt + 1)
 		}),
-		onSuccess: () => supervise(0),
+		onSuccess: () => failPending(pending, new Socket.SocketError({
+			reason: new Socket.SocketCloseError({ code: 1000, closeReason: "WebSocket closed before the RPC response" }),
+		})).pipe(Effect.andThen(supervise(0))),
 	})))
 
 	yield* Scope.addFinalizer(stateScope, SubscriptionRef.set(connection, { _tag: "Closed" }))
@@ -248,6 +268,7 @@ export const makeWsState = (
 			...requestOptions,
 			endpoint: options.endpoint,
 			writer,
+			guardedWrite,
 			pending,
 			nextId,
 			timeout: requestTimeout,

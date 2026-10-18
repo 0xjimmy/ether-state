@@ -10,3 +10,5 @@ export { RpcPriority } from "./rpc/priority.js"
 export type { RequestPriority } from "./rpc/priority.js"
 
 export type { ChainUpdate } from "./rpc/live-chain.js"
+
+export type { BeforeDispatch, DispatchDeclined } from "./rpc/transport/dispatch.js"

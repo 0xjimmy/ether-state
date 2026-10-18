@@ -1,3 +1,4 @@
+import type { BeforeDispatch } from "./rpc/transport/dispatch.js"
 import { matchesLog } from "./rpc/watch.js"
 import { RpcPriority, type RequestPriority } from "./rpc/priority.js"
 import { Cause, Effect, Exit, Option, Schema, Stream } from "effect"
@@ -136,6 +137,7 @@ const requestPublic = (
 const requestRawTransaction = (
 	client: EvmClient,
 	params: unknown,
+	beforeDispatch?: BeforeDispatch,
 ): Effect.Effect<unknown, EvmClientError | Schema.SchemaError> => {
 	const definition = getRpcMethod("eth_sendRawTransaction")
 	return Schema.decodeUnknownEffect(definition.request)({
@@ -144,20 +146,20 @@ const requestRawTransaction = (
 		method: "eth_sendRawTransaction",
 		params: params ?? [],
 	}).pipe(
-		Effect.flatMap((decoded) => client.sendRawTransaction(decoded.params[0])),
+		Effect.flatMap((decoded) => client.sendRawTransaction(decoded.params[0], { beforeDispatch })),
 		Effect.flatMap(Schema.encodeEffect(definition.result)),
 	)
 }
 
-function request<ReturnType = unknown>(client: EvmClient, input: ViemRequest, options?: unknown, priority?: RequestPriority): Promise<ReturnType>
-function request(client: EvmClient, input: ViemRequest, options?: unknown, priority: RequestPriority = "live"): Promise<unknown> {
+function request<ReturnType = unknown>(client: EvmClient, input: ViemRequest, options?: unknown, priority?: RequestPriority, beforeDispatch?: BeforeDispatch): Promise<ReturnType>
+function request(client: EvmClient, input: ViemRequest, options?: unknown, priority: RequestPriority = "live", beforeDispatch?: BeforeDispatch): Promise<unknown> {
 	if (input.method !== "eth_sendRawTransaction" && !isHedgeableMethod(input.method)) {
 		return Promise.reject(unsupported(input.method))
 	}
 	if (client.isClosed) return Promise.reject(new ViemAdapterError("EvmClient is closed", { code: 4900 }))
 	const signal = options !== null && typeof options === "object" && "signal" in options && options.signal instanceof AbortSignal
 		? options.signal : undefined
-	if (input.method === "eth_sendRawTransaction") return runEffect(requestRawTransaction(client, input.params), signal)
+	if (input.method === "eth_sendRawTransaction") return runEffect(requestRawTransaction(client, input.params, beforeDispatch), signal)
 	if (input.method === "eth_call") return runEffect(requestCall(client, input.params).pipe(Effect.provideService(RpcPriority, priority)), signal)
 	return runEffect(requestPublic(client, input.method, input.params).pipe(Effect.provideService(RpcPriority, priority)), signal)
 }
@@ -230,8 +232,8 @@ const subscribe = async (client: EvmClient, subscription: ViemSubscription): Pro
 	return { unsubscribe: () => { controller.abort() } }
 }
 
-export const viemTransport = (client: EvmClient, settings?: { readonly priority?: RequestPriority }): EvmClientViemTransport => () => {
-	const requestClient: ViemRequestFunction = (input, options) => request(client, input, options, settings?.priority)
+export const viemTransport = (client: EvmClient, settings?: { readonly priority?: RequestPriority; readonly beforeDispatch?: BeforeDispatch | undefined }): EvmClientViemTransport => () => {
+	const requestClient: ViemRequestFunction = (input, options) => request(client, input, options, settings?.priority, settings?.beforeDispatch)
 	return {
 		config: {
 			key: "ether-state",

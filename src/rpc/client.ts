@@ -1,3 +1,4 @@
+import type { BeforeDispatch, DispatchDeclined } from "./transport/dispatch.js"
 import { liveChain, type ChainUpdate } from "./live-chain.js"
 import { RpcPriority, RpcDeadline } from "./priority.js"
 import { Cause, Effect, Exit, Option, Schema, Scope, Semaphore, Stream, SubscriptionRef } from "effect"
@@ -10,7 +11,7 @@ import { ethHttpRpc, HttpBatcher, type RpcHttpError } from "./transport/http.js"
 import { MulticallReads, multicallAddress, type ContractRead, type CallError } from "./multicall.js"
 import { RequestScheduler } from "./transport/queue.js"
 import { callChanges, makeWatchedState, matchesLog, type BlockLogBatch, type WatchCallOptions, type WatchedCall, type WatchedState } from "./watch.js"
-import { readFailurePolicy } from "./recovery.js"
+import { readFailurePolicy, recoverRead } from "./recovery.js"
 import { RpcHistory } from "./history.js"
 import { orderedReceipts, type ReceiptBlockUpdate } from "./live.js"
 import { RpcQueryCoordinator, rpcQueryKey, type RpcQueryCacheStats } from "./query.js"
@@ -526,7 +527,6 @@ export class EvmClient {
 	private chainUpdates: Stream.Stream<ChainUpdate> = Stream.empty
 	private logBlocks: Stream.Stream<BlockLogBatch> = Stream.empty
 	private readonly completedBlocks = new Map<bigint, ReceiptBlockUpdate>()
-	private blockReceiptsAvailable = true
 	private latestHead: BlockHead | undefined
 	private logProgress: { block: bigint | null; at: number | null; error: string | null } = { block: null, at: null, error: null }
 	private readonly knownHeads = new Map<string, BlockHead>()
@@ -556,8 +556,8 @@ export class EvmClient {
 		this.scheduler = new RequestScheduler({ rps: options.maxRequestsPerSecond, concurrency: options.maxConcurrentRequests, capacity: options.maxQueuedRequests })
 		this.reads = new MulticallReads({ scope: wsScope, window: options.multicallWindow, size: options.multicallMaxCalls,
 			maxCalldataBytes: options.multicallMaxCalldataBytes, capacity: options.maxQueuedRequests,
-			fetch: (transaction, block) => this.fetch({ method: "eth_call", params: [transaction, block] }),
-			code: (block) => this.fetch({ method: "eth_getCode", params: [multicallAddress, block] }) })
+			fetch: (transaction, block) => this.fetchAttempt({ method: "eth_call", params: [transaction, block] }),
+			code: (block) => this.fetchAttempt({ method: "eth_getCode", params: [multicallAddress, block] }) })
 		this.blocks = lifetime.watch(SubscriptionRef.changes(head).pipe(
 			Stream.filter(Option.isSome),
 			Stream.map((value) => value.value),
@@ -741,9 +741,18 @@ export class EvmClient {
 	}
 
 	call(read: ContractRead): Effect.Effect<string, CallError> {
-		return this.lifetime.run(this.budget("eth_call", Effect.gen({ self: this }, function* () {
+		const reference = read.block ?? "latest"
+		const block = typeof reference === "string" && hashPattern.test(reference)
+			? { blockHash: reference, requireCanonical: true } : reference
+		return this.lifetime.run(Schema.encodeEffect(getRpcMethod("eth_call").request)({
+			jsonrpc: "2.0", id: 1, method: "eth_call", params: [read.transaction, block],
+		}).pipe(Effect.andThen(recoverRead(this.callAttempt(read)))))
+	}
+
+	private callAttempt(read: ContractRead): Effect.Effect<string, CallError> {
+		return this.budget("eth_call", Effect.gen({ self: this }, function* () {
 			const reference = read.block ?? "latest"
-			if (reference === "pending") return yield* this.fetch({ method: "eth_call", params: [read.transaction, reference] })
+			if (reference === "pending") return yield* this.fetchAttempt({ method: "eth_call", params: [read.transaction, reference] })
 			const hashReference = typeof reference === "object" && "blockHash" in reference ? reference.blockHash
 				: typeof reference === "string" && hashPattern.test(reference) ? reference : undefined
 			let number: bigint
@@ -782,7 +791,7 @@ export class EvmClient {
 			const block = hash === null ? number : { blockHash: hash, requireCanonical: true }
 			yield* Schema.encodeEffect(getRpcMethod("eth_call").request)({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [read.transaction, block] })
 			return yield* this.reads.request({ ...read, block, blockNumber: number })
-		})))
+		}))
 	}
 
 	watchLogs(filter: RpcLogFilter = {}): Stream.Stream<RpcLog> {
@@ -817,7 +826,7 @@ export class EvmClient {
 		return this.lifetime.watch(Stream.unwrap(Effect.gen({ self: this }, function* () {
 			let shared = this.callStreams.get(key)
 			if (shared === undefined) {
-				shared = yield* callChanges(this, { transaction: options.transaction, ...(options.multicall === undefined ? {} : { multicall: options.multicall }),
+				shared = yield* callChanges({ watchBlocks: () => this.watchBlocks(), call: read => this.callAttempt(read) }, { transaction: options.transaction, ...(options.multicall === undefined ? {} : { multicall: options.multicall }),
 					decode: Effect.succeed }).pipe(Stream.share({ capacity: 16, replay: 1 }), Scope.provide(this.wsScope))
 				this.callStreams.set(key, shared)
 			}
@@ -830,7 +839,7 @@ export class EvmClient {
 		return this.lifetime.run(Effect.gen({ self: this }, function* () {
 			const scope = yield* Scope.fork(this.lifetime.scope)
 			yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-			const state = yield* makeWatchedState(this, options).pipe(Scope.provide(scope))
+			const state = yield* makeWatchedState({ watchBlocks: () => this.watchBlocks(), call: read => this.callAttempt(read) }, options).pipe(Scope.provide(scope))
 			return { ...state, changes: this.lifetime.watch(state.changes) }
 		}))
 	}
@@ -843,13 +852,17 @@ export class EvmClient {
 		})))
 	}
 
-	sendRawTransaction(raw: string): Effect.Effect<string, EvmClientError> {
+	sendRawTransaction(raw: string, options?: { readonly beforeDispatch?: BeforeDispatch | undefined }): Effect.Effect<string, EvmClientError> {
 		return this.lifetime.run(this.budget("eth_sendRawTransaction", Effect.gen({ self: this }, function* () {
 			yield* Schema.encodeEffect(getRpcMethod("eth_sendRawTransaction").request)({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] })
 			const sources = [...(yield* this.endpoints).values()].filter((endpoint) => endpoint.status._tag === "Selected")
 			if (sources.length === 0) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
-			const results = yield* Effect.forEach(sources, (source) => Effect.exit(this.requestAt(source, { method: "eth_sendRawTransaction", params: [raw] })), { concurrency: "unbounded" })
+			const results = yield* Effect.forEach(sources, (source) => Effect.exit(this.requestAt(source,
+				{ method: "eth_sendRawTransaction", params: [raw] }, false, () => true, options?.beforeDispatch)), { concurrency: "unbounded" })
 			for (const result of results) if (Exit.isSuccess(result)) return result.value
+			if (results.every(result => Exit.isFailure(result) &&
+				Option.getOrUndefined(Cause.findErrorOption(result.cause))?._tag === "DispatchDeclined"))
+				return yield* Effect.fail<DispatchDeclined>({ _tag: "DispatchDeclined" })
 			return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
 		}).pipe(Effect.provideService(RpcPriority, "action"))))
 	}
@@ -882,11 +895,13 @@ export class EvmClient {
 			const known = this.knownHeads.get(block.hash)
 			if (known && known.number !== block.number) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
 			let receipts: readonly RpcReceipt[] | null = null
-			if (this.blockReceiptsAvailable) {
-				const result = yield* this.fetchBlockReceipts(block).pipe(Effect.result)
-				if (result._tag === "Success") receipts = result.success
-				else if (readFailurePolicy(result.failure) === "unsupported") this.blockReceiptsAvailable = false
-				else return yield* Effect.fail(result.failure)
+			const result = yield* this.fetchBlockReceipts(block).pipe(Effect.result)
+			if (result._tag === "Success") receipts = result.success
+			else {
+				const capable = [...(yield* this.endpoints).values()].some((source) =>
+					(source.status._tag === "Selected" || source.status._tag === "Standby") &&
+					!source.unsupportedMethods?.includes("eth_getBlockReceipts"))
+				if (capable && readFailurePolicy(result.failure) === "retry") return yield* Effect.fail(result.failure)
 			}
 			const logs = receipts === null ? yield* this.fetchPhysical({ method: "eth_getLogs", params: [{ blockHash: block.hash }] }, logs =>
 				(/^0x0+$/.test(block.logsBloom) || logs.length > 0) && logs.every((log, index) => {
@@ -1117,7 +1132,17 @@ export class EvmClient {
 		readonly params: RpcParams<Method>
 	}): Effect.Effect<RpcResult<Method>, EvmClientError> {
 		const definition = getRpcMethod(request.method)
-		return this.lifetime.run(this.budget(request.method, Effect.gen({ self: this }, function* () {
+		return this.lifetime.run(Schema.encodeEffect(definition.request)({
+			jsonrpc: "2.0", id: 1, method: request.method, params: request.params,
+		}).pipe(Effect.andThen(recoverRead(this.fetchAttempt(request)))))
+	}
+
+	private fetchAttempt<Method extends HedgeableRpcMethodName>(request: {
+		readonly method: Method
+		readonly params: RpcParams<Method>
+	}): Effect.Effect<RpcResult<Method>, EvmClientError> {
+		const definition = getRpcMethod(request.method)
+		return this.budget(request.method, Effect.gen({ self: this }, function* () {
 			const priority = yield* RpcPriority
 			return yield* Schema.encodeEffect(definition.request)({
 			jsonrpc: "2.0", id: 1, method: request.method, params: request.params,
@@ -1129,7 +1154,7 @@ export class EvmClient {
 			result: definition.result, load: this.fetchPhysical(request),
 			keep: (result) => keepCompletedResult(request, result),
 				}) }))
-		})))
+		}))
 	}
 
 	private fetchPhysical<Method extends HedgeableRpcMethodName>(request: {
@@ -1159,10 +1184,14 @@ export class EvmClient {
 					const endpoints = untried.length > 0 ? untried : available
 					const score = (source: EndpointState): number => {
 						const recent = this.responseTimes.get(source.endpoint + request.method) ?? []
-						const latency = recent.reduce((sum, item) => sum + item, 0) / (recent.length || 1)
+						const latency = recent.length > 0 ? recent.reduce((sum, item) => sum + item, 0) / recent.length : 1_000
+						const failures = source.observations.filter((row) => row.method === request.method).slice(-4)
+						const failurePenalty = failures.reduce((sum, row) => sum + (row._tag === "Failure" ? 2_000
+							: row._tag === "Cancelled" && row.elapsedMs > 500 ? Math.min(4_000, row.elapsedMs) : 0), 0)
 						return Math.max(0, (this.retryAt.get(source.endpoint) ?? 0) - Date.now(),
 							(this.methodRetryAt.get(source.endpoint + request.method) ?? 0) - Date.now()) * 10 +
-							(tried.has(source.endpoint) ? 10_000 : 0) + (source.transport === "ws" ? 20_000 : 0) + this.scheduler.load(source.endpoint) * 50 + (latency || 100)
+							(tried.has(source.endpoint) ? 10_000 : 0) + (source.transport === "ws" ? 20_000 : 0) +
+							this.scheduler.load(source.endpoint) * 50 + latency + failurePenalty
 					}
 					endpoints.sort((a, b) => score(a) - score(b))
 					const source = endpoints[0]
@@ -1194,7 +1223,7 @@ export class EvmClient {
 	}
 
 	getBlock(): Effect.Effect<BlockHead, EvmClientError> {
-		return this.lifetime.run(this.refreshLock.withPermit(SubscriptionRef.get(this.head).pipe(Effect.flatMap((cached) => {
+		return this.lifetime.run(recoverRead(this.refreshLock.withPermit(SubscriptionRef.get(this.head).pipe(Effect.flatMap((cached) => {
 			if (Option.isSome(cached) && cached.value.timestamp !== null &&
 				Date.now() - cached.value.observedAt <= this.config.network.blockTime) {
 				return Effect.succeed(cached.value)
@@ -1208,22 +1237,22 @@ export class EvmClient {
 					? Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
 					: Effect.succeed(current.value)),
 			)
-		}))))
+		})))))
 	}
 
 	private requestAt<Method extends HttpRpcMethodName>(source: EndpointSource, request: {
 		readonly method: Method; readonly params: RpcParams<Method>
-	}, batch = false, accept: (result: RpcResult<Method>) => boolean = () => true): Effect.Effect<RpcResult<Method>, EvmClientError> {
+	}, batch = false, accept: (result: RpcResult<Method>) => boolean = () => true, beforeDispatch?: BeforeDispatch): Effect.Effect<RpcResult<Method>, EvmClientError> {
 		return Effect.gen({ self: this }, function* () {
 		const priority = yield* RpcPriority
 		const effect = source.transport === "http"
-			? ethHttpRpc({ method: request.method, endpoint: source.endpoint, inputParams: request.params,
+			? ethHttpRpc({ method: request.method, endpoint: source.endpoint, inputParams: request.params, beforeDispatch,
 				...(batch ? { batch: this.httpBatcher(source.endpoint, priority) } : {}) }).pipe(
 				Effect.provideService(HttpClient.HttpClient, this.httpClient))
 			: SubscriptionRef.get(this.activeWs).pipe(Effect.flatMap((active): Effect.Effect<RpcResult<Method>, EvmClientError> => {
 				const match = active.find(({ state }) => state.endpoint === source.endpoint)
 				return match === undefined ? Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
-					: ethWsRpc({ method: request.method, state: match.state, inputParams: request.params })
+					: ethWsRpc({ method: request.method, state: match.state, inputParams: request.params, beforeDispatch })
 			}))
 		const ready: Effect.Effect<void> = Effect.suspend(() => {
 			const delay = (this.retryAt.get(source.endpoint) ?? 0) - Date.now()
