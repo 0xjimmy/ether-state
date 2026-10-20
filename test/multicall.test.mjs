@@ -64,3 +64,53 @@ test('cancelling one duplicate multicall waiter preserves the remaining call', a
     assert.deepEqual(transactions, [{ to: multicallAddress, data: request }])
   })))
 })
+
+const word = value => `0x${value.toString(16).padStart(64, '0')}`
+const aggregateResult = (blockWord) => encodeAbiParameters(parseAbiParameters('(bool, bytes)[]'), [[
+  [true, '0x1111'], [true, '0x222222'], [true, blockWord],
+]])
+const arbitrumStyleFetch = ({ l1BlockNumber, arbBlockNumber, aggregates, singles }) => transaction => Effect.sync(() => {
+  if (transaction.to !== multicallAddress) { singles.push(transaction); return transaction.data === '0x18160ddd' ? '0x1111' : '0x222222' }
+  aggregates.push(transaction.data)
+  // Arbitrum chains answer block.number (and so Multicall3.getBlockNumber) with the parent chain's block number.
+  // ArbSys(0x64).arbBlockNumber() answers the chain's own block number.
+  if (transaction.data.includes('42cbb15c')) return aggregateResult(word(l1BlockNumber))
+  return aggregateResult(arbBlockNumber === undefined ? '0x' : word(arbBlockNumber))
+})
+
+test('multicall verifies the block with ArbSys on chains where block.number is the parent chain block', async () => {
+  await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const aggregates = [], singles = []
+    const reads = new MulticallReads({
+      scope: yield* Scope.Scope, window: 0, size: 10, capacity: 20, maxCalldataBytes: 1_024,
+      code: () => Effect.succeed('0x01'),
+      fetch: arbitrumStyleFetch({ l1BlockNumber: 5n, arbBlockNumber: 17n, aggregates, singles }),
+    })
+    const first = { transaction: { to: `0x${'11'.repeat(20)}`, data: '0x18160ddd' }, block: 17n, blockNumber: 17n }
+    const second = { transaction: { to: `0x${'22'.repeat(20)}`, data: '0x313ce567' }, block: 17n, blockNumber: 17n }
+    for (let round = 0; round < 3; round++) {
+      assert.deepEqual(yield* Effect.all([reads.request(first), reads.request(second)], { concurrency: 'unbounded' }), ['0x1111', '0x222222'])
+    }
+    assert.equal(singles.length, 2, 'only the first batch should fall back to single calls')
+    assert.equal(aggregates.length, 3)
+    assert.ok(aggregates[1].includes('0000000000000000000000000000000000000064') && aggregates[1].includes('a3b1b31d'))
+  })))
+})
+
+test('multicall stops batching when neither block source matches', async () => {
+  await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const aggregates = [], singles = []
+    const reads = new MulticallReads({
+      scope: yield* Scope.Scope, window: 0, size: 10, capacity: 20, maxCalldataBytes: 1_024,
+      code: () => Effect.succeed('0x01'),
+      fetch: arbitrumStyleFetch({ l1BlockNumber: 5n, arbBlockNumber: undefined, aggregates, singles }),
+    })
+    const first = { transaction: { to: `0x${'11'.repeat(20)}`, data: '0x18160ddd' }, block: 17n, blockNumber: 17n }
+    const second = { transaction: { to: `0x${'22'.repeat(20)}`, data: '0x313ce567' }, block: 17n, blockNumber: 17n }
+    for (let round = 0; round < 3; round++) {
+      assert.deepEqual(yield* Effect.all([reads.request(first), reads.request(second)], { concurrency: 'unbounded' }), ['0x1111', '0x222222'])
+    }
+    assert.equal(aggregates.length, 2)
+    assert.equal(singles.length, 6)
+  })))
+})

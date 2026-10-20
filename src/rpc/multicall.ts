@@ -8,11 +8,15 @@ import type { RpcBlockReference, RpcTransactionRequest } from "./schema.js"
 const address = "0xcA11bde05977b3631167028862bE2a173976CA11"
 const aggregate3Selector = "0x82ad56cb"
 const getBlockNumberSelector = "0x42cbb15c"
+// Arbitrum chains answer block.number with the parent chain's block number; ArbSys answers the chain's own.
+const arbSysAddress = "0x0000000000000000000000000000000000000064"
+const arbBlockNumberSelector = "0xa3b1b31d"
 const wordBytes = 32
 const maxWord = (1n << 256n) - 1n
 const Results = Schema.Array(Schema.Tuple([Schema.Boolean, Schema.String]))
 
 type AggregateCall = readonly [target: string, allowFailure: boolean, callData: string]
+type BlockSource = "multicall" | "arbSys" | "unsupported"
 
 const word = (value: bigint): string => {
 	if (value < 0n || value > maxWord) throw new Error("Invalid ABI word")
@@ -110,7 +114,7 @@ export interface ContractRead {
 }
 
 export class MulticallReads {
-	private blockVerificationSupported = true
+	private blockSource: BlockSource = "multicall"
 	private readonly groups = new Map<string, BatchQueue<RpcTransactionRequest, string, CallError>>()
 	readonly stats = { batches: 0, calls: 0, singles: 0, fallbacks: 0 }
 
@@ -124,7 +128,7 @@ export class MulticallReads {
 	request(read: ContractRead & { readonly block: RpcBlockReference; readonly blockNumber: bigint }): Effect.Effect<string, CallError> {
 		return Effect.gen({ self: this }, function* () {
 		const priority = yield* RpcPriority
-		if (!this.blockVerificationSupported || read.multicall === false || typeof read.transaction.to !== "string" || read.transaction.to.toLowerCase() === address.toLowerCase() ||
+		if (this.blockSource === "unsupported" || read.multicall === false || typeof read.transaction.to !== "string" || read.transaction.to.toLowerCase() === address.toLowerCase() ||
 			Object.keys(read.transaction).some((key) => key !== "to" && key !== "data" && key !== "input")) {
 			this.stats.singles++
 			return yield* this.options.fetch(read.transaction, read.block)
@@ -172,9 +176,10 @@ export class MulticallReads {
 			}
 			this.stats.batches++
 			this.stats.calls += calls.length
+			const source = this.blockSource === "arbSys" ? "arbSys" : "multicall"
 			const data = encodeAggregate3([
 				...calls.map((call): AggregateCall => [call.to ?? "", true, call.data ?? call.input ?? "0x"]),
-				[address, false, getBlockNumberSelector],
+				source === "arbSys" ? [arbSysAddress, true, arbBlockNumberSelector] : [address, false, getBlockNumberSelector],
 			])
 			const raw = yield* this.options.fetch({ to: address, data }, block)
 			const decoded = yield* Effect.try({ try: (): unknown => decodeAggregate3(raw),
@@ -182,7 +187,8 @@ export class MulticallReads {
 			const results = yield* Schema.decodeUnknownEffect(Results)(decoded)
 			const metadata = results[calls.length]
 			if (results.length !== calls.length + 1 || metadata?.[0] !== true || !/^0x[\da-f]{64}$/i.test(metadata[1]) || BigInt(metadata[1]) !== blockNumber) {
-				this.blockVerificationSupported = false
+				if (source === "arbSys") this.blockSource = "unsupported"
+				else if (this.blockSource === "multicall") this.blockSource = "arbSys"
 				return yield* Effect.fail<InvalidMulticall>({ _tag: "InvalidMulticall", message: "Multicall block verification failed" })
 			}
 			return results.slice(0, calls.length).map(([success, data]): Exit.Exit<string, CallError> => success
