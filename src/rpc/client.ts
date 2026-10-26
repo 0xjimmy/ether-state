@@ -1,6 +1,6 @@
 import { liveChain, type ChainUpdate } from "./live-chain.js"
 import { RpcPriority, RpcDeadline } from "./priority.js"
-import { Cause, Effect, Exit, Option, Schema, Scope, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Cause, Deferred, Effect, Exit, Option, Schema, Scope, Semaphore, Stream, SubscriptionRef } from "effect"
 import { makeLifetime, type Lifetime } from "../internal/lifetime.js"
 import { HttpClient } from "effect/unstable/http"
 import type { Socket } from "effect/unstable/socket"
@@ -848,9 +848,15 @@ export class EvmClient {
 			yield* Schema.encodeEffect(getRpcMethod("eth_sendRawTransaction").request)({ jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: [raw] })
 			const sources = [...(yield* this.endpoints).values()].filter((endpoint) => endpoint.status._tag === "Selected")
 			if (sources.length === 0) return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
-			const results = yield* Effect.forEach(sources, (source) => Effect.exit(this.requestAt(source, { method: "eth_sendRawTransaction", params: [raw] })), { concurrency: "unbounded" })
-			for (const result of results) if (Exit.isSuccess(result)) return result.value
-			return yield* Effect.fail<BlockUnavailable>({ _tag: "BlockUnavailable" })
+			const accepted = yield* Deferred.make<string, BlockUnavailable>()
+			let remaining = sources.length
+			yield* Effect.forEach(sources, (source) => Effect.gen({ self: this }, function* () {
+				const result = yield* Effect.exit(this.requestAt(source, { method: "eth_sendRawTransaction", params: [raw] }))
+				remaining--
+				if (Exit.isSuccess(result)) yield* Deferred.succeed(accepted, result.value)
+				else if (remaining === 0) yield* Deferred.fail(accepted, { _tag: "BlockUnavailable" } satisfies BlockUnavailable)
+			}).pipe(Effect.forkIn(this.lifetime.scope)), { concurrency: "unbounded", discard: true })
+			return yield* Deferred.await(accepted)
 		}).pipe(Effect.provideService(RpcPriority, "action"))))
 	}
 

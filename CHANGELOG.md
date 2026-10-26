@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- Return the first accepted raw-transaction broadcast response without waiting for slower endpoints. Remaining sends keep the client lifetime and request deadline.
+- Share canonical live blocks, receipts, and logs across index consumers.
+- Stream sparse model history and recover complete candle coverage with configurable history windows.
+- Keep live RPC capacity available while model history uses background requests.
+- Add Postgres model storage with explicit schema ownership.
+
 ## 0.2.3
 
 - Create a GitHub Release named and tagged with the package version after npm publishing.

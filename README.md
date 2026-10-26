@@ -43,6 +43,8 @@ The defaults use a zero-millisecond collection window, 20 items per batch, 256 K
 
 Viem `newHeads` and log subscriptions recover missed block numbers after a notification gap. Header watches fetch headers only. Log watches use one block-hash-pinned `eth_getLogs` request for each filter and block. The adapter rejects wallet methods and node-managed filter lifecycle methods. It accepts `eth_sendRawTransaction` only for an already signed transaction.
 
+Raw-transaction broadcast sends identical bytes to all selected endpoints and returns the first accepted response. Slower sends continue within the original request deadline and client lifetime. Client close interrupts pending sends. A returned hash confirms node acceptance, not inclusion or successful execution.
+
 ### Native log and call watches
 
 `client.watchLogs()` emits all logs. Pass an address and topic filter to select logs locally.
